@@ -42,3 +42,16 @@ record(calc, "$(P)cnt") {
     field(CALC, "A+1")
     field(INPA, "$(P)cnt.VAL")
 }
+record(waveform, "$(P)chars") {
+    field(FTVL, "CHAR")
+    field(NELM, "32")
+}
+record(stringin, "$(P)si") {
+    field(VAL, "input")
+    field(PINI, "YES")
+}
+record(longout, "$(P)ro") {
+    field(VAL, "7")
+    field(DISP, "1")
+    field(PINI, "YES")
+}

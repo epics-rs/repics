@@ -1,117 +1,236 @@
 """Blocking Channel Access front end.
 
-Every function takes one PV name or a list of names and returns a result of
-the same shape. ``timeout`` bounds the whole operation, connect included.
-Failures raise ``CaError`` (``CaTimeout`` for deadlines).
+Every function takes one PV name or a sequence of names and returns a result
+of the same shape; a sequence is worked on concurrently. ``timeout`` bounds
+the whole operation, connect included, and may be seconds, ``None`` (wait
+forever) or a one-tuple ``(deadline,)`` of an absolute ``time.time()``.
+
+Failures raise ``CaError`` (``CaTimeout`` for deadlines, ``CaDisconnected``
+for a channel that is not connected). With ``throw=False`` a failure is
+returned instead, as a ``CaNothing`` whose ``ok`` is False.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Sequence
+from typing import Any, Callable
 
-from .._context import Deadline, PVs, channel, is_single
-from .._epicsrs import CaChannel, CaSubscription, ChannelInfo
-from .._value import augment
+from .._context import (
+    Deadline,
+    PVs,
+    channel,
+    context,
+    get_channel_infos,
+    is_single,
+    note_connected,
+    purge_channel_caches,
+)
+from .._dbr import *  # noqa: F401,F403 - the libca vocabulary is part of this API
+from .._dbr import __all__ as _dbr_all
+from .._epicsrs import CaError
+from .._monitor import Dispatcher, SubscriptionBase
+from .._dbr import request
+from .._ops import DEFAULT_TIMEOUT, collect, finish, info_or, put_value, values_for
+from .._value import CaNothing, augment
 
-__all__ = ["caget", "caput", "camonitor", "cainfo", "connect", "Subscription"]
+__all__ = [
+    "caget",
+    "caput",
+    "camonitor",
+    "cainfo",
+    "connect",
+    "Subscription",
+    "CaNothing",
+    "CAInfo",
+    "get_channel_infos",
+    "purge_channel_caches",
+    "DEFAULT_TIMEOUT",
+    *_dbr_all,
+]
 
 
-def _connect_one(name: str, deadline: Deadline) -> CaChannel:
-    ch = channel(name)
-    if not ch.connected:
-        ch.wait_connected(deadline.remaining())
-    return ch
+# ---------------------------------------------------------------------------
+# connect / caget / caput / cainfo
+#
+# Every operation is one Rust call per PV, connect included, all of a list
+# in flight together against the one deadline; Python only shapes the
+# request and the result.
 
 
-def _each(pv: PVs, fn: Callable[[str], Any]) -> Any:
+def connect(pv: PVs, wait: bool = True, timeout: Any = DEFAULT_TIMEOUT, throw: bool = True) -> Any:
+    """Start (``wait=False``) or complete (``wait=True``) each PV's connection.
+
+    Returns a ``CaNothing`` per PV: ``ok`` True once connected.
+    """
+    names = [pv] if is_single(pv) else list(pv)
+    chs = [channel(n) for n in names]
+    if wait:
+        got = context().wait_connected_many(chs, Deadline(timeout).remaining())
+        out = collect(names, got, throw)
+    else:
+        out = [CaNothing(n) for n in names]
+    return out[0] if is_single(pv) else out
+
+
+def caget(
+    pv: PVs,
+    form: str = "time",
+    datatype: Any = None,
+    count: int = 0,
+    timeout: Any = DEFAULT_TIMEOUT,
+    throw: bool = True,
+) -> Any:
+    """Read each PV.
+
+    ``form`` selects the metadata class (``plain``, ``sts``, ``time``,
+    ``gr``, ``ctrl``); ``datatype`` overrides the wire type (``str``,
+    ``int``, ``float``, a numpy dtype, a ``DBR_*`` code, ``DBR_CHAR_STR``,
+    ``DBR_ENUM_STR``); ``count`` is 0 for the server's current element
+    count, negative for the full native count, else a cap.
+    """
+    base, offset, enum_as_string, marker = request(datatype, form)
+    remaining = Deadline(timeout).remaining()
     if is_single(pv):
-        return fn(pv)  # type: ignore[arg-type]
-    return [fn(name) for name in pv]
+        try:
+            snap = channel(pv).get(base, offset, enum_as_string, count, remaining)  # type: ignore[arg-type]
+        except CaError as e:
+            return finish(pv, e, throw)  # type: ignore[arg-type]
+        note_connected(pv)  # type: ignore[arg-type]
+        return augment(snap, marker)
+    chs = [channel(n) for n in pv]
+    got = context().get_many(chs, base, offset, enum_as_string, count, remaining)
+    return collect(pv, got, throw, marker)
 
 
-def connect(pv: PVs, timeout: float | None = 5.0) -> None:
-    """Wait until each PV is connected."""
-    deadline = Deadline(timeout)
-    _each(pv, lambda name: _connect_one(name, deadline))
+def caput(
+    pv: PVs,
+    value: Any,
+    wait: bool = False,
+    datatype: Any = None,
+    timeout: Any = DEFAULT_TIMEOUT,
+    repeat_value: bool = False,
+    throw: bool = True,
+) -> Any:
+    """Write each PV. With a sequence of PVs, ``value`` is repeated if it is a
+    scalar or string (or ``repeat_value``), else zipped one per PV.
 
-
-def caget(pv: PVs, form: str = "time", count: int = 0, timeout: float | None = 5.0) -> Any:
-    """Read each PV. ``form`` selects the metadata (``plain``, ``sts``, ``time``, ``gr``, ``ctrl``)."""
-    deadline = Deadline(timeout)
-
-    def one(name: str) -> Any:
-        ch = _connect_one(name, deadline)
-        return augment(ch.get(form=form, count=count, timeout=deadline.remaining()))
-
-    return _each(pv, one)
-
-
-def caput(pv: PVs, value: Any, wait: bool = True, timeout: float | None = 5.0) -> None:
-    """Write each PV. With a list of PVs, ``value`` is a list of the same length."""
-    deadline = Deadline(timeout)
+    ``wait=True`` returns after the record has processed. Returns a
+    ``CaNothing`` per PV, ``ok`` True on success.
+    """
+    remaining = Deadline(timeout).remaining()
     if is_single(pv):
-        _connect_one(pv, deadline).put(value, wait=wait, timeout=deadline.remaining())  # type: ignore[arg-type]
-        return
-    if len(value) != len(pv):
-        raise ValueError(f"{len(pv)} PVs but {len(value)} values")
-    for name, v in zip(pv, value):
-        _connect_one(name, deadline).put(v, wait=wait, timeout=deadline.remaining())
+        try:
+            channel(pv).put(put_value(value, datatype), wait=wait, timeout=remaining)  # type: ignore[arg-type]
+        except CaError as e:
+            return finish(pv, e, throw)  # type: ignore[arg-type]
+        note_connected(pv)  # type: ignore[arg-type]
+        return CaNothing(pv)  # type: ignore[arg-type]
+    values = [put_value(v, datatype) for v in values_for(pv, value, repeat_value)]
+    chs = [channel(n) for n in pv]
+    got = context().put_many(chs, values, wait, remaining)
+    return collect(pv, got, throw)
 
 
-def cainfo(pv: PVs, timeout: float | None = 5.0) -> ChannelInfo | list[ChannelInfo]:
-    """Channel facts: host, native type, element count, access rights."""
-    deadline = Deadline(timeout)
-    return _each(pv, lambda name: _connect_one(name, deadline).info())
+def cainfo(pv: PVs, wait: bool = True, timeout: Any = DEFAULT_TIMEOUT, throw: bool = True) -> Any:
+    """Connection state, host, access rights, native type and element count.
+
+    With ``wait=False`` the current state is reported without connecting.
+    """
+    names = [pv] if is_single(pv) else list(pv)
+    chs = [channel(n) for n in names]
+    got = context().wait_connected_many(chs, Deadline(timeout).remaining()) if wait else [None] * len(chs)
+    out = [info_or(n, ch, r, throw) for n, ch, r in zip(names, chs, got)]
+    return out[0] if is_single(pv) else out
 
 
-class Subscription:
-    """A running monitor. ``callback(value)`` runs on the subscription's own thread."""
+# ---------------------------------------------------------------------------
+# camonitor
 
-    def __init__(self, name: str, sub: CaSubscription, callback: Callable[[Any], None]):
-        self.name = name
-        self._sub = sub
-        self._callback = callback
-        self.dropped = 0
-        self._thread = threading.Thread(target=self._run, name=f"camonitor {name}", daemon=True)
-        self._thread.start()
+
+class _ThreadDispatcher(Dispatcher):
+    """Drains the hub on one daemon thread, started with the first
+    subscription, and calls back there."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._thread: threading.Thread | None = None
+
+    def started(self) -> None:
+        with self.lock:
+            if self._thread is not None:
+                return
+            self._thread = threading.Thread(target=self._run, name="epicsrs camonitor", daemon=True)
+            self._thread.start()
 
     def _run(self) -> None:
         while True:
-            try:
-                snap = self._sub.recv()
-            except Exception:  # noqa: BLE001 - the channel dropped; keep draining until closed
-                continue
-            if snap is None:
+            batch = self.hub.recv_batch()
+            if batch is None:
                 return
-            self._callback(augment(snap))
+            for sub, kind, payload in self.plan(batch):
+                value = sub._event(kind, payload)
+                if value is not None:
+                    sub._deliver(value)
 
-    def close(self) -> None:
-        self._sub.close()
-        if threading.current_thread() is not self._thread:
-            self._thread.join()
+    def shutdown(self) -> None:
+        super().shutdown()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(5.0)
 
-    def __enter__(self) -> "Subscription":
-        return self
 
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+_dispatcher = _ThreadDispatcher()
+
+
+class Subscription(SubscriptionBase):
+    """A running monitor. Callbacks run on the front end's dispatcher
+    thread, shared by every subscription, in arrival order.
+
+    The subscription connects in the background (reporting a ``CaNothing``
+    with ``ECA_TIMEOUT`` if ``connect_timeout`` passes first, then keeps
+    waiting), then delivers every update. With ``all_updates=False``
+    updates that queued while the dispatcher was busy collapse into the
+    latest one and ``dropped_callbacks`` counts them. A disconnect is
+    delivered as a ``CaNothing`` with ``ECA_DISCONN`` when
+    ``notify_disconnect`` is set; the monitor resumes on reconnection
+    either way.
+    """
+
+    def __init__(self, name: str, callback: Callable[..., Any], **kw: Any):
+        super().__init__(_dispatcher, name, callback, **kw)
+
+    def _deliver(self, value: Any) -> None:
+        try:
+            self.callback(value)
+        except Exception as e:  # noqa: BLE001 - reported, then the monitor stops
+            self._report(e)
+            self.close()
 
 
 def camonitor(
     pv: PVs,
-    callback: Callable[..., None],
-    deadband: float = 0.0,
+    callback: Callable[..., Any],
+    form: str = "time",
+    datatype: Any = None,
+    count: int = 0,
     mask: int | None = None,
-    timeout: float | None = 5.0,
+    all_updates: bool = False,
+    notify_disconnect: bool = False,
+    connect_timeout: Any = None,
 ) -> Subscription | list[Subscription]:
-    """Subscribe. For one PV ``callback(value)``; for a list ``callback(value, index)``."""
-    deadline = Deadline(timeout)
-
-    def one(name: str, cb: Callable[[Any], None]) -> Subscription:
-        ch = _connect_one(name, deadline)
-        return Subscription(name, ch.subscribe(deadband=deadband, mask=mask), cb)
-
+    """Subscribe to each PV; returns at once, the connection completes in
+    the background. For one PV ``callback(value)``; for a sequence
+    ``callback(value, index)``.
+    """
+    kw = dict(
+        form=form,
+        datatype=datatype,
+        count=count,
+        mask=mask,
+        all_updates=all_updates,
+        notify_disconnect=notify_disconnect,
+        connect_timeout=connect_timeout,
+    )
     if is_single(pv):
-        return one(pv, callback)  # type: ignore[arg-type]
-    return [one(name, lambda v, i=i: callback(v, i)) for i, name in enumerate(pv)]
+        return Subscription(pv, callback, **kw)  # type: ignore[arg-type]
+    return [Subscription(name, lambda v, i=i: callback(v, i), **kw) for i, name in enumerate(pv)]
