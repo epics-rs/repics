@@ -1,0 +1,1111 @@
+//! pvAccess server: `PvaSharedPV`, `PvaProvider`, `PvaServer`, and the
+//! `PvaWorkQueue` that hands client operations to Python.
+//!
+//! No Python code runs on a runtime worker. A client PUT or RPC arrives on
+//! the server's task, becomes a `ServerOperation` holding a oneshot reply
+//! slot, and is pushed onto a `PvaWorkQueue`; a Python-owned thread or
+//! asyncio task pulls it with `recv`/`recv_async`, runs the handler, and
+//! finishes it with `done()`. Dropping the operation without `done()`
+//! drops the oneshot sender, which the server task reads as a failed
+//! operation — an operation can never be left dangling.
+//!
+//! PV state (open/close, current value, channel hooks, forced disconnect
+//! on close) lives in `epics_pva_rs`'s `SharedPV`/`SharedSource`. Monitor
+//! subscribers are kept here instead, because the library's outbox
+//! carries a bare `PvField`, so a post could only ever say "everything
+//! changed". `Ring` carries the posted value together with its changed
+//! paths, squashes into the tail when full (newest value wins, changed
+//! sets union, the lost update's paths land in `overrun`), and a pump task
+//! feeds the server's `MonitorStream` one update at a time, so a slow
+//! client holds back nothing but its own ring.
+
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+
+use epics_pva_rs::config::Endpoint;
+use epics_pva_rs::proto::BitSet;
+use epics_pva_rs::pvdata::encode::{changed_bitset_paths, fill_unmarked_from_prior};
+use epics_pva_rs::pvdata::{FieldDesc, PvField, RpcReply};
+use epics_pva_rs::server_native::config::ClientCredentials;
+use epics_pva_rs::server_native::runtime::PvaServer as RsServer;
+use epics_pva_rs::server_native::shared_pv::{SharedPV, SharedSource};
+use epics_pva_rs::server_native::source::{
+    AccessChecked, AccessGate, ChannelContext, ChannelInvalidator, ChannelSource, MonitorOptions,
+    MonitorStream, MonitorUpdate, OpError, RPC_NOT_IMPLEMENTED, SourceRead, SubscriptionSeed,
+    WatermarkEvent, put_denied,
+};
+use epics_pva_rs::server_native::{CompositeSource, DynSource, PvaServerConfig};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+
+use super::error::{PvaError, map_pva};
+use super::value::{Type, Value};
+use crate::runtime::{block_on, into_py_future, runtime};
+
+/// Credentials for the trait's context-free entry points (`put_value`,
+/// `rpc`), which the wire layer never uses.
+fn no_creds() -> Arc<ClientCredentials> {
+    Arc::new(ClientCredentials {
+        method: "anonymous".into(),
+        account: String::new(),
+        host: String::new(),
+        authority: String::new(),
+        roles: Vec::new(),
+    })
+}
+
+fn all_marks(desc: &FieldDesc) -> BitSet {
+    let mut all = BitSet::new();
+    for b in 0..desc.total_bits() {
+        all.set(b);
+    }
+    all
+}
+
+// ---------------------------------------------------------------------------
+// ServerOperation
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum OpKind {
+    Put,
+    Rpc,
+}
+
+/// What the handler answered: `Ok(None)` for a plain completion,
+/// `Ok(Some(..))` for an RPC reply value, `Err(text)` for an error reply.
+type OpReply = Result<Option<(FieldDesc, PvField)>, String>;
+
+/// A client PUT or RPC waiting for the Python handler (p4p `ServerOperation`).
+#[pyclass(name = "ServerOperation", module = "epicsrs._epicsrs", frozen)]
+pub struct ServerOperation {
+    kind: OpKind,
+    name: String,
+    desc: Arc<FieldDesc>,
+    value: PvField,
+    marks: BitSet,
+    peer: SocketAddr,
+    creds: Arc<ClientCredentials>,
+    pv_request: Option<PvField>,
+    reply: Mutex<Option<oneshot::Sender<OpReply>>>,
+}
+
+impl ServerOperation {
+    fn finish(&self, reply: OpReply) -> PyResult<()> {
+        let tx = self
+            .reply
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or_else(|| PvaError::new_err("done() already called"))?;
+        // The server task may have given up (client gone); nothing to do.
+        let _ = tx.send(reply);
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl ServerOperation {
+    /// `"put"` or `"rpc"`.
+    fn kind(&self) -> &'static str {
+        match self.kind {
+            OpKind::Put => "put",
+            OpKind::Rpc => "rpc",
+        }
+    }
+
+    /// The PV name the client addressed.
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// `"host:port"` of the client.
+    fn peer(&self) -> String {
+        self.peer.to_string()
+    }
+
+    /// The client's account as authenticated by the server.
+    fn account(&self) -> &str {
+        &self.creds.account
+    }
+
+    /// The authentication method (`"anonymous"`, `"ca"`, `"x509"`, ...).
+    fn method(&self) -> &str {
+        &self.creds.method
+    }
+
+    /// For a PUT: the PV's value with the client's fields applied and
+    /// marked. For an RPC: the request argument.
+    fn value(&self) -> Value {
+        Value::from_parts(self.desc.clone(), self.value.clone(), self.marks.clone())
+    }
+
+    /// The pvRequest the client sent, or `None`.
+    #[pyo3(name = "pvRequest")]
+    fn pv_request(&self) -> Option<Value> {
+        let req = self.pv_request.as_ref()?;
+        let desc = Arc::new(req.descriptor());
+        let marks = all_marks(&desc);
+        Some(Value::from_parts(desc, req.clone(), marks))
+    }
+
+    /// Complete the operation. `error` replies a failure; `value` is the
+    /// RPC reply (ignored for PUT). Calling it twice is an error.
+    #[pyo3(signature = (value=None, error=None))]
+    fn done(&self, value: Option<&Value>, error: Option<String>) -> PyResult<()> {
+        let reply = match (error, value, self.kind) {
+            (Some(msg), _, _) => Err(msg),
+            (None, Some(v), OpKind::Rpc) => {
+                let (desc, field, _) = v.snapshot()?;
+                Ok(Some((desc.as_ref().clone(), field)))
+            }
+            (None, _, _) => Ok(None),
+        };
+        self.finish(reply)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PvaWorkQueue
+// ---------------------------------------------------------------------------
+
+enum EventKind {
+    Put(ServerOperation),
+    Rpc(ServerOperation),
+    FirstConnect,
+    LastDisconnect,
+}
+
+/// One item for Python: which PV (an opaque token Python registered,
+/// normally a weakref to its `SharedPV`) and what happened.
+struct Event {
+    token: Arc<Py<PyAny>>,
+    kind: EventKind,
+}
+
+/// The channel a Python drain loop pulls server events from.
+#[pyclass(name = "PvaWorkQueue", module = "epicsrs._epicsrs", frozen)]
+pub struct PvaWorkQueue {
+    tx: mpsc::UnboundedSender<Event>,
+    /// Behind an `Arc` so `recv_async` can move it into a `'static` future.
+    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>>,
+    stopped: CancellationToken,
+}
+
+type Receiver = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>>;
+
+impl PvaWorkQueue {
+    async fn do_recv(rx: Receiver, stopped: CancellationToken) -> Option<Event> {
+        if stopped.is_cancelled() {
+            return None;
+        }
+        let mut rx = rx.lock().await;
+        tokio::select! {
+            biased;
+            _ = stopped.cancelled() => None,
+            ev = rx.recv() => ev,
+        }
+    }
+}
+
+type PyEvent = (Py<PyAny>, &'static str, Option<Py<ServerOperation>>);
+
+fn event_to_py(py: Python<'_>, ev: Event) -> PyResult<PyEvent> {
+    let token = ev.token.clone_ref(py);
+    Ok(match ev.kind {
+        EventKind::Put(op) => (token, "put", Some(Py::new(py, op)?)),
+        EventKind::Rpc(op) => (token, "rpc", Some(Py::new(py, op)?)),
+        EventKind::FirstConnect => (token, "first", None),
+        EventKind::LastDisconnect => (token, "last", None),
+    })
+}
+
+#[pymethods]
+impl PvaWorkQueue {
+    #[new]
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        PvaWorkQueue {
+            tx,
+            rx: Arc::new(tokio::sync::Mutex::new(rx)),
+            stopped: CancellationToken::new(),
+        }
+    }
+
+    /// Block (GIL released) for the next event: `(token, kind, op)` where
+    /// `kind` is `"put"`, `"rpc"`, `"first"` or `"last"`. `None` once
+    /// `stop()` was called.
+    fn recv(&self, py: Python<'_>) -> PyResult<Option<PyEvent>> {
+        let ev = block_on(py, Self::do_recv(self.rx.clone(), self.stopped.clone()));
+        ev.map(|ev| event_to_py(py, ev)).transpose()
+    }
+
+    /// `recv` as an awaitable.
+    fn recv_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let rx = self.rx.clone();
+        let stopped = self.stopped.clone();
+        into_py_future(py, async move {
+            let ev = Self::do_recv(rx, stopped).await;
+            Python::attach(|py| ev.map(|ev| event_to_py(py, ev)).transpose())
+        })
+    }
+
+    /// Wake the drain loop with `None`; later events are dropped, which
+    /// fails their operations at the client.
+    fn stop(&self) {
+        self.stopped.cancel();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Monitor ring
+// ---------------------------------------------------------------------------
+
+struct RingInner {
+    items: VecDeque<MonitorUpdate>,
+    limit: usize,
+    producer_done: bool,
+    receiver_gone: bool,
+}
+
+/// A bounded per-subscriber queue of marked updates with pvxs
+/// squash-to-tail semantics.
+struct Ring {
+    inner: Mutex<RingInner>,
+    notify: Notify,
+}
+
+fn union(a: &mut Vec<String>, b: &[String]) {
+    for p in b {
+        if !a.contains(p) {
+            a.push(p.clone());
+        }
+    }
+}
+
+impl Ring {
+    fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Ring {
+            inner: Mutex::new(RingInner {
+                items: VecDeque::new(),
+                limit: limit.max(1),
+                producer_done: false,
+                receiver_gone: false,
+            }),
+            notify: Notify::new(),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, RingInner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Returns false once the subscriber is gone, so the owner can drop it.
+    fn post(&self, update: MonitorUpdate) -> bool {
+        {
+            let mut g = self.lock();
+            if g.receiver_gone {
+                return false;
+            }
+            if g.items.len() < g.limit {
+                g.items.push_back(update);
+            } else if let Some(tail) = g.items.back_mut() {
+                // Newest value wins; the tail's changed paths were never
+                // delivered, so they become overrun as well as staying
+                // changed.
+                let lost = tail.marked.take().unwrap_or_default();
+                union(&mut tail.overrun, &lost);
+                union(&mut tail.overrun, &update.overrun);
+                let mut marked = lost;
+                union(&mut marked, &update.marked.unwrap_or_default());
+                tail.marked = Some(marked);
+                tail.value = update.value;
+                tail.type_changed |= update.type_changed;
+            }
+        }
+        self.notify.notify_one();
+        true
+    }
+
+    async fn recv(&self) -> Option<MonitorUpdate> {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut g = self.lock();
+                if let Some(u) = g.items.pop_front() {
+                    return Some(u);
+                }
+                if g.producer_done {
+                    return None;
+                }
+            }
+            notified.await;
+        }
+    }
+
+    fn finish(&self) {
+        self.lock().producer_done = true;
+        self.notify.notify_waiters();
+    }
+
+    fn receiver_gone(&self) {
+        self.lock().receiver_gone = true;
+    }
+}
+
+/// Feed a ring into the server's stream one update at a time; the
+/// `send().await` is the backpressure point.
+fn spawn_pump<T: Send + 'static>(
+    ring: Arc<Ring>,
+    map: fn(MonitorUpdate) -> T,
+) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel(1);
+    runtime().spawn(async move {
+        while let Some(u) = ring.recv().await {
+            if tx.send(map(u)).await.is_err() {
+                ring.receiver_gone();
+                break;
+            }
+        }
+    });
+    rx
+}
+
+// ---------------------------------------------------------------------------
+// PvEntry / PySource
+// ---------------------------------------------------------------------------
+
+/// The Rust side of one Python `SharedPV`.
+struct PvEntry {
+    pv: SharedPV,
+    /// Held across store-and-deliver in `post` and across
+    /// register-and-snapshot in `subscribe`, so a subscriber sees every
+    /// post either in its seed or in its ring, never neither.
+    subs: Mutex<Vec<Arc<Ring>>>,
+    events: mpsc::UnboundedSender<Event>,
+    token: Arc<Py<PyAny>>,
+}
+
+impl PvEntry {
+    fn lock_subs(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Ring>>> {
+        self.subs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn send(&self, kind: EventKind) -> Result<(), OpError> {
+        self.events
+            .send(Event {
+                token: self.token.clone(),
+                kind,
+            })
+            .map_err(|_| OpError::failed("SharedPV handler queue is stopped"))
+    }
+
+    fn post(&self, desc: Arc<FieldDesc>, field: PvField, marks: BitSet) -> PyResult<()> {
+        let mut subs = self.lock_subs();
+        let Some(opened) = self.pv.introspection() else {
+            return Err(PvaError::new_err("SharedPV not open"));
+        };
+        if *desc != opened {
+            return Err(PvaError::new_err(
+                "post() value type differs from the open() type; close() first",
+            ));
+        }
+        // An unmarked Value posts everything: a no-op post is never what
+        // a caller of post() meant.
+        let marks = if marks.is_empty() {
+            all_marks(&desc)
+        } else {
+            marks
+        };
+        let prior = self
+            .pv
+            .current()
+            .ok_or_else(|| PvaError::new_err("SharedPV not open"))?;
+        let merged = fill_unmarked_from_prior(&desc, &marks, 0, field, &prior);
+        let marked = changed_bitset_paths(&desc, &marks);
+        self.pv.try_post_checked(merged.clone()).map_err(map_pva)?;
+        subs.retain(|ring| {
+            ring.post(MonitorUpdate {
+                value: merged.clone(),
+                marked: Some(marked.clone()),
+                type_changed: false,
+                overrun: Vec::new(),
+            })
+        });
+        Ok(())
+    }
+
+    fn close(&self) {
+        let rings = std::mem::take(&mut *self.lock_subs());
+        self.pv.close();
+        for ring in rings {
+            ring.finish();
+        }
+    }
+
+    /// Register a subscriber and snapshot the seed under one lock.
+    fn subscribe(&self, limit: usize) -> Option<(PvField, Arc<Ring>)> {
+        let mut subs = self.lock_subs();
+        let initial = self.pv.current()?;
+        let ring = Ring::new(limit);
+        subs.push(ring.clone());
+        Some((initial, ring))
+    }
+
+    async fn run_op(&self, kind: OpKind, op: ServerOperation) -> Result<RpcReply, OpError> {
+        let (tx, rx) = oneshot::channel();
+        *op.reply.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        self.send(match kind {
+            OpKind::Put => EventKind::Put(op),
+            OpKind::Rpc => EventKind::Rpc(op),
+        })?;
+        match rx.await {
+            Ok(Ok(Some((desc, value)))) => Ok(RpcReply::Value(desc, value)),
+            Ok(Ok(None)) => Ok(RpcReply::Empty),
+            Ok(Err(msg)) => Err(OpError::failed(msg)),
+            Err(_) => Err(OpError::failed(
+                "handler dropped the operation without done()",
+            )),
+        }
+    }
+}
+
+/// A `SharedSource` whose PUT/RPC go to Python and whose monitors carry
+/// marks. Everything else is the library's behaviour, delegated.
+pub struct PySource {
+    inner: SharedSource,
+    entries: Mutex<HashMap<String, Arc<PvEntry>>>,
+    /// The PV each attached channel was created against, one element per
+    /// channel, keyed by channel name. `SharedSource` resolves a channel
+    /// close by looking the name up in its table, so a PV removed while
+    /// clients hold channels never sees its last-disconnect edge; keeping
+    /// the attachment here makes remove-then-close (p4p's recipe for a
+    /// `close(sync=True)` that can complete) fire it. Only when a removed
+    /// PV keeps live channels while another PV is served under the same
+    /// name is a close ambiguous; it is then charged oldest-first.
+    attached: Mutex<HashMap<String, VecDeque<Arc<PvEntry>>>>,
+}
+
+impl PySource {
+    fn entry(&self, name: &str) -> Option<Arc<PvEntry>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .cloned()
+    }
+}
+
+impl ChannelSource for PySource {
+    fn access(&self) -> &AccessGate {
+        self.inner.access()
+    }
+
+    fn beacon_change(&self) -> u64 {
+        self.inner.beacon_change()
+    }
+
+    fn set_channel_invalidator(&self, invalidator: ChannelInvalidator) {
+        self.inner.set_channel_invalidator(invalidator)
+    }
+
+    fn list_pvs(&self) -> impl std::future::Future<Output = Vec<String>> + Send {
+        self.inner.list_pvs()
+    }
+
+    fn has_pv(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
+        self.inner.has_pv(name)
+    }
+
+    fn get_introspection(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<FieldDesc>> + Send {
+        self.inner.get_introspection(name)
+    }
+
+    fn await_introspection(
+        &self,
+        name: &str,
+        ctx: ChannelContext,
+    ) -> impl std::future::Future<Output = Option<FieldDesc>> + Send {
+        self.inner.await_introspection(name, ctx)
+    }
+
+    fn get_value(&self, name: &str) -> impl std::future::Future<Output = Option<PvField>> + Send {
+        self.inner.get_value(name)
+    }
+
+    fn put_value(
+        &self,
+        name: &str,
+        value: PvField,
+    ) -> impl std::future::Future<Output = Result<(), OpError>> + Send {
+        // The wire layer only ever issues delta PUTs; a full-value put
+        // is the same operation with every bit marked.
+        let entry = self.entry(name);
+        let name = name.to_string();
+        async move {
+            let Some(entry) = entry else {
+                return Err(OpError::failed(format!("no such PV: {name}")));
+            };
+            let Some(desc) = entry.pv.introspection() else {
+                return Err(OpError::failed("SharedPV not open"));
+            };
+            let desc = Arc::new(desc);
+            let marks = all_marks(&desc);
+            let op = ServerOperation {
+                kind: OpKind::Put,
+                name,
+                desc,
+                value,
+                marks,
+                peer: SocketAddr::from(([0, 0, 0, 0], 0)),
+                creds: no_creds(),
+                pv_request: None,
+                reply: Mutex::new(None),
+            };
+            entry.run_op(OpKind::Put, op).await.map(|_| ())
+        }
+    }
+
+    fn put_delta_checked(
+        &self,
+        checked: AccessChecked,
+        desc: Arc<FieldDesc>,
+        changed: BitSet,
+        delta: &PvField,
+        ctx: ChannelContext,
+    ) -> impl std::future::Future<Output = Result<(), OpError>> + Send {
+        let entry = self.entry(checked.pv_name());
+        let delta = delta.clone();
+        async move {
+            if !checked.allows_write() {
+                return Err(put_denied(&checked, &ctx));
+            }
+            let Some(entry) = entry else {
+                return Err(OpError::failed(format!(
+                    "no such PV: {}",
+                    checked.pv_name()
+                )));
+            };
+            let Some(prior) = entry.pv.current() else {
+                return Err(OpError::failed("SharedPV not open"));
+            };
+            let merged = fill_unmarked_from_prior(&desc, &changed, 0, delta, &prior);
+            let op = ServerOperation {
+                kind: OpKind::Put,
+                name: checked.pv_name().to_string(),
+                desc,
+                value: merged,
+                marks: changed,
+                peer: ctx.peer,
+                creds: ctx.creds.clone(),
+                pv_request: ctx.pv_request.clone(),
+                reply: Mutex::new(None),
+            };
+            entry.run_op(OpKind::Put, op).await.map(|_| ())
+        }
+    }
+
+    fn is_writable(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
+        self.inner.is_writable(name)
+    }
+
+    fn subscribe(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<MonitorStream<PvField>>> + Send {
+        let entry = self.entry(name);
+        async move {
+            let (initial, ring) = entry?.subscribe(4)?;
+            ring.post(MonitorUpdate::from(initial));
+            Some(MonitorStream::Channel(spawn_pump(ring, |u| u.value)))
+        }
+    }
+
+    fn subscribe_seeded(
+        &self,
+        checked: AccessChecked,
+        _ctx: ChannelContext,
+        opts: MonitorOptions,
+    ) -> impl std::future::Future<Output = Option<SubscriptionSeed<MonitorUpdate>>> + Send {
+        let entry = if checked.allows_read() {
+            self.entry(checked.pv_name())
+        } else {
+            None
+        };
+        let limit = (opts.queue_size as usize).max(1);
+        async move {
+            let (initial, ring) = entry?.subscribe(limit)?;
+            Some(SubscriptionSeed {
+                initial: Some(SourceRead::from(initial)),
+                updates: MonitorStream::Channel(spawn_pump(ring, |u| u)),
+                on_start: None,
+            })
+        }
+    }
+
+    fn rpc(
+        &self,
+        name: &str,
+        request_desc: FieldDesc,
+        request_value: PvField,
+    ) -> impl std::future::Future<Output = Result<RpcReply, OpError>> + Send {
+        let entry = self.entry(name);
+        let name = name.to_string();
+        async move {
+            let Some(entry) = entry else {
+                return Err(OpError::failed(format!("no such PV: {name}")));
+            };
+            let desc = Arc::new(request_desc);
+            let marks = all_marks(&desc);
+            let op = ServerOperation {
+                kind: OpKind::Rpc,
+                name,
+                desc,
+                value: request_value,
+                marks,
+                peer: SocketAddr::from(([0, 0, 0, 0], 0)),
+                creds: no_creds(),
+                pv_request: None,
+                reply: Mutex::new(None),
+            };
+            entry.run_op(OpKind::Rpc, op).await
+        }
+    }
+
+    fn rpc_checked(
+        &self,
+        checked: AccessChecked,
+        request_desc: FieldDesc,
+        request_value: PvField,
+        ctx: ChannelContext,
+    ) -> impl std::future::Future<Output = Result<RpcReply, OpError>> + Send {
+        let entry = self.entry(checked.pv_name());
+        async move {
+            if !checked.allows_read() {
+                return Err(OpError::denied(format!(
+                    "RPC denied by access security: '{}' from {}/{}/{}",
+                    checked.pv_name(),
+                    ctx.creds.host,
+                    ctx.creds.account,
+                    ctx.creds.method,
+                )));
+            }
+            let Some(entry) = entry else {
+                return Err(OpError::failed(RPC_NOT_IMPLEMENTED));
+            };
+            let desc = Arc::new(request_desc);
+            let marks = all_marks(&desc);
+            let op = ServerOperation {
+                kind: OpKind::Rpc,
+                name: checked.pv_name().to_string(),
+                desc,
+                value: request_value,
+                marks,
+                peer: ctx.peer,
+                creds: ctx.creds.clone(),
+                pv_request: ctx.pv_request.clone(),
+                reply: Mutex::new(None),
+            };
+            entry.run_op(OpKind::Rpc, op).await
+        }
+    }
+
+    fn process(&self, name: &str) -> impl std::future::Future<Output = Result<(), OpError>> + Send {
+        self.inner.process(name)
+    }
+
+    fn notify_watermark(&self, name: &str, ctx: &ChannelContext, ev: WatermarkEvent) {
+        self.inner.notify_watermark(name, ctx, ev)
+    }
+
+    fn notify_monitor_start(&self, name: &str, ctx: &ChannelContext, start: bool) {
+        self.inner.notify_monitor_start(name, ctx, start)
+    }
+
+    fn notify_channel_open(&self, name: &str, _ctx: &ChannelContext) {
+        if let Some(entry) = self.entry(name) {
+            self.attached
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(name.to_string())
+                .or_default()
+                .push_back(entry.clone());
+            entry.pv.attach_channel();
+        }
+    }
+
+    fn notify_channel_close(&self, name: &str, _ctx: &ChannelContext) {
+        let entry = {
+            let mut attached = self.attached.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = attached.get_mut(name).and_then(|q| q.pop_front());
+            if attached.get(name).is_some_and(|q| q.is_empty()) {
+                attached.remove(name);
+            }
+            entry
+        };
+        if let Some(entry) = entry {
+            entry.pv.detach_channel();
+        }
+    }
+
+    fn monitor_watermarks(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<(usize, usize)>> + Send {
+        self.inner.monitor_watermarks(name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PvaSharedPV
+// ---------------------------------------------------------------------------
+
+/// The Rust half of `epicsrs.pva.server.SharedPV`.
+#[pyclass(name = "PvaSharedPV", module = "epicsrs._epicsrs", frozen)]
+pub struct PvaSharedPV {
+    entry: Arc<PvEntry>,
+}
+
+#[pymethods]
+impl PvaSharedPV {
+    /// `queue` receives this PV's operations and connect events, each
+    /// tagged with `token` (Python passes a weakref to its `SharedPV`).
+    #[new]
+    fn new(queue: &PvaWorkQueue, token: Py<PyAny>) -> Self {
+        let pv = SharedPV::new();
+        // PUT never reaches this handler — `PySource::put_delta_checked`
+        // routes to Python first — but installing one is what makes the
+        // library report the PV as writable to clients.
+        pv.on_put(|_, _| Err("unreachable: PUT is routed to Python".into()));
+        let entry = Arc::new(PvEntry {
+            pv: pv.clone(),
+            subs: Mutex::new(Vec::new()),
+            events: queue.tx.clone(),
+            token: Arc::new(token),
+        });
+        let first = Arc::downgrade(&entry);
+        pv.on_first_connect(move |_| {
+            if let Some(e) = first.upgrade() {
+                let _ = e.send(EventKind::FirstConnect);
+            }
+        });
+        let last = Arc::downgrade(&entry);
+        pv.on_last_disconnect(move |_| {
+            if let Some(e) = last.upgrade() {
+                let _ = e.send(EventKind::LastDisconnect);
+            }
+        });
+        PvaSharedPV { entry }
+    }
+
+    /// Declare the type and initial value; clients may connect afterwards.
+    fn open(&self, value: &Value) -> PyResult<()> {
+        let (desc, field, _) = value.snapshot()?;
+        self.entry
+            .pv
+            .open(desc.as_ref().clone(), field)
+            .map_err(map_pva)
+    }
+
+    /// Drop the value and force-disconnect every client.
+    fn close(&self) {
+        self.entry.close();
+    }
+
+    #[pyo3(name = "isOpen")]
+    fn is_open(&self) -> bool {
+        self.entry.pv.is_open()
+    }
+
+    /// Apply the marked fields of `value` (all of them when nothing is
+    /// marked) and deliver them to every subscriber.
+    fn post(&self, value: &Value) -> PyResult<()> {
+        let (desc, field, marks) = value.snapshot()?;
+        self.entry.post(desc, field, marks)
+    }
+
+    /// The current value, or `None` while closed.
+    fn current(&self) -> Option<Value> {
+        let desc = self.entry.pv.introspection()?;
+        let field = self.entry.pv.current()?;
+        Some(Value::from_parts(Arc::new(desc), field, BitSet::new()))
+    }
+
+    /// The opened type, or `None` while closed.
+    fn r#type(&self) -> Option<Type> {
+        self.entry
+            .pv
+            .introspection()
+            .map(|d| Type::from_desc(Arc::new(d)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PvaProvider
+// ---------------------------------------------------------------------------
+
+/// A named table of PVs (p4p `StaticProvider`).
+#[pyclass(name = "PvaProvider", module = "epicsrs._epicsrs", frozen)]
+pub struct PvaProvider {
+    name: String,
+    source: Arc<PySource>,
+}
+
+#[pymethods]
+impl PvaProvider {
+    #[new]
+    fn new(name: String) -> Self {
+        PvaProvider {
+            name,
+            source: Arc::new(PySource {
+                inner: SharedSource::new(),
+                entries: Mutex::new(HashMap::new()),
+                attached: Mutex::new(HashMap::new()),
+            }),
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn add(&self, name: String, pv: &PvaSharedPV) -> PyResult<()> {
+        let mut entries = self
+            .source
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if entries.contains_key(&name) {
+            return Err(PyValueError::new_err(format!("PV {name:?} already added")));
+        }
+        self.source
+            .inner
+            .try_add(name.clone(), pv.entry.pv.clone())
+            .map_err(|e| PyValueError::new_err(format!("PV {:?} already added", e.0)))?;
+        entries.insert(name, pv.entry.clone());
+        Ok(())
+    }
+
+    fn remove(&self, name: &str) -> bool {
+        let removed = self
+            .source
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name)
+            .is_some();
+        self.source.inner.remove(name);
+        removed
+    }
+
+    fn keys(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .source
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PvaServer
+// ---------------------------------------------------------------------------
+
+fn yes(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "yes" | "y" | "1" | "true" | "on"
+    )
+}
+
+fn first<'a>(conf: &'a HashMap<String, String>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| conf.get(*k).map(|v| v.trim()))
+        .filter(|v| !v.is_empty())
+}
+
+fn port_of(conf: &HashMap<String, String>, keys: &[&str]) -> PyResult<Option<u16>> {
+    match first(conf, keys) {
+        None => Ok(None),
+        Some(v) => v
+            .parse::<u16>()
+            .map(Some)
+            .map_err(|e| PyValueError::new_err(format!("{}={v:?}: {e}", keys[0]))),
+    }
+}
+
+/// Apply the p4p-style `EPICS_PVAS_*` / `EPICS_PVA_*` keys of `conf`.
+fn configure(mut c: PvaServerConfig, conf: &HashMap<String, String>) -> PyResult<PvaServerConfig> {
+    if let Some(p) = port_of(conf, &["EPICS_PVAS_SERVER_PORT", "EPICS_PVA_SERVER_PORT"])? {
+        c.tcp_port = p;
+    }
+    if let Some(p) = port_of(
+        conf,
+        &["EPICS_PVAS_BROADCAST_PORT", "EPICS_PVA_BROADCAST_PORT"],
+    )? {
+        c.udp_port = p;
+    }
+    if let Some(v) = first(conf, &["EPICS_PVAS_INTF_ADDR_LIST"]) {
+        let mut ifaces = Vec::new();
+        for tok in v.split_whitespace() {
+            let host = tok.rsplit_once(':').map(|(h, _)| h).unwrap_or(tok);
+            let ip: IpAddr = host.parse().map_err(|e| {
+                PyValueError::new_err(format!("EPICS_PVAS_INTF_ADDR_LIST entry {tok:?}: {e}"))
+            })?;
+            ifaces.push(ip);
+        }
+        c.interfaces = ifaces;
+    }
+    if let Some(v) = first(
+        conf,
+        &[
+            "EPICS_PVAS_AUTO_BEACON_ADDR_LIST",
+            "EPICS_PVA_AUTO_ADDR_LIST",
+        ],
+    ) {
+        c.auto_beacon = yes(v);
+    }
+    if let Some(v) = first(
+        conf,
+        &["EPICS_PVAS_BEACON_ADDR_LIST", "EPICS_PVA_ADDR_LIST"],
+    ) {
+        let default_port = if c.udp_port == 0 { 5076 } else { c.udp_port };
+        c.beacon_destinations = v
+            .split_whitespace()
+            .filter_map(|tok| Endpoint::parse(tok, default_port))
+            .collect();
+    }
+    Ok(c)
+}
+
+/// A running pvAccess server over one or more providers.
+#[pyclass(name = "PvaServer", module = "epicsrs._epicsrs", frozen)]
+pub struct PvaServer {
+    inner: Mutex<Option<RsServer>>,
+    tcp: SocketAddr,
+    udp_port: u16,
+    addr: IpAddr,
+}
+
+#[pymethods]
+impl PvaServer {
+    /// `providers` are `(provider, order)` pairs; lower `order` is
+    /// searched first. `isolate` binds loopback on ephemeral ports with
+    /// no beacons and ignores `conf`/`useenv`.
+    #[new]
+    #[pyo3(signature = (providers, conf=None, useenv=true, isolate=false))]
+    fn new(
+        py: Python<'_>,
+        providers: Vec<(PyRef<'_, PvaProvider>, i32)>,
+        conf: Option<HashMap<String, String>>,
+        useenv: bool,
+        isolate: bool,
+    ) -> PyResult<Self> {
+        let composite = CompositeSource::new();
+        for (p, order) in &providers {
+            let source: DynSource = p.source.clone();
+            composite
+                .add_source(&p.name, source, *order)
+                .map_err(PyValueError::new_err)?;
+        }
+        let config = if isolate {
+            None
+        } else {
+            let base = if useenv {
+                PvaServerConfig::default().with_env()
+            } else {
+                PvaServerConfig::default()
+            };
+            Some(configure(base, &conf.unwrap_or_default())?)
+        };
+        let server = block_on(py, async move {
+            match config {
+                None => RsServer::isolated(composite),
+                Some(c) => RsServer::start(composite, c),
+            }
+        })
+        .map_err(map_pva)?;
+        let tcp = server.tcp_addr();
+        let cfg = server.config();
+        let udp_port = cfg.udp_port;
+        let addr = if isolate {
+            IpAddr::from([127, 0, 0, 1])
+        } else if let Some(ip) = cfg.interfaces.iter().find(|ip| !ip.is_unspecified()) {
+            *ip
+        } else if cfg.bind_ip.is_unspecified() {
+            IpAddr::from([127, 0, 0, 1])
+        } else {
+            cfg.bind_ip
+        };
+        Ok(PvaServer {
+            inner: Mutex::new(Some(server)),
+            tcp,
+            udp_port,
+            addr,
+        })
+    }
+
+    /// Stop serving and disconnect every client. Idempotent.
+    fn stop(&self, py: Python<'_>) {
+        let server = self.inner.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(s) = server {
+            block_on(py, async move {
+                s.stop();
+                drop(s);
+            });
+        }
+    }
+
+    fn running(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
+    fn tcp_port(&self) -> u16 {
+        self.tcp.port()
+    }
+
+    fn udp_port(&self) -> u16 {
+        self.udp_port
+    }
+
+    /// A p4p-style `conf()` dict a client can be built from to reach
+    /// exactly this server: the search address carries the UDP port
+    /// explicitly, and a name server entry gives a UDP-free path.
+    ///
+    /// `EPICS_PVA_BROADCAST_PORT` is deliberately absent. p4p sets it to
+    /// the server's UDP port, but a pvxs client also *binds* that port
+    /// for beacons, and the ephemeral UDP socket epics-pva-rs binds has
+    /// no SO_REUSEADDR, so the client's bind fails with EADDRINUSE.
+    fn conf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        let addr = self.addr.to_string();
+        d.set_item("EPICS_PVA_ADDR_LIST", format!("{addr}:{}", self.udp_port))?;
+        d.set_item("EPICS_PVA_AUTO_ADDR_LIST", "NO")?;
+        d.set_item("EPICS_PVA_SERVER_PORT", self.tcp.port().to_string())?;
+        d.set_item(
+            "EPICS_PVA_NAME_SERVERS",
+            format!("{addr}:{}", self.tcp.port()),
+        )?;
+        d.set_item("EPICS_PVAS_INTF_ADDR_LIST", &addr)?;
+        d.set_item("EPICS_PVAS_SERVER_PORT", self.tcp.port().to_string())?;
+        d.set_item("EPICS_PVAS_BROADCAST_PORT", self.udp_port.to_string())?;
+        Ok(d)
+    }
+}

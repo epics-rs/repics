@@ -55,6 +55,42 @@ libca `ECA_*` status. `cainfo` returns a `CAInfo`.
   `auto_monitor`, `char_value`, `units`, ...) over one subscription; it
   raises on failure like the rest of the package.
 
+## pvAccess
+
+The API follows [p4p](https://github.com/epics-base/p4p): `Context`,
+`Value`/`Type`, the `nt` wrappers, and `SharedPV`/`StaticProvider`/`Server`.
+
+```python
+from epicsrs.pva import Context
+from epicsrs.pva.nt import NTScalar, NTURI
+
+with Context("pva") as ctxt:
+    v = ctxt.get("SIM:ai")            # augmented, as for CA
+    ctxt.put("SIM:ao", 2.5)
+    r = ctxt.rpc("SIM:sum", NTURI([("a", "d"), ("b", "d")]).wrap("SIM:sum", kws={"a": 1, "b": 2}))
+    with ctxt.monitor("SIM:cnt", print, notify_disconnect=True):
+        ...
+```
+
+```python
+from epicsrs.pva.server import SharedPV, Server
+
+pv = SharedPV(nt=NTScalar("d"), initial=1.0)
+
+@pv.put
+def onput(pv, op):
+    pv.post(op.value())
+    op.done()
+
+Server.forever(providers=[{"SIM:ao": pv}])
+```
+
+`epicsrs.pva.asyncio.Context` and `epicsrs.pva.server.asyncio.SharedPV` are
+the asyncio flavours; handlers there may be coroutines. Put and RPC handlers
+run on Python-owned threads (or the event loop), never on the network runtime,
+and a slow monitor consumer squashes updates in Rust instead of queueing
+Python objects. NTNDArray reads are zero-copy views of the received buffer.
+
 ## Performance
 
 The extension owns one tokio runtime with one worker thread (override with
@@ -96,5 +132,6 @@ pytest                     # needs `softioc-rs` on PATH or EPICSRS_SOFTIOC=<path
 
 ## Status
 
-Channel Access client, blocking and asyncio. pvAccess client and server
-follow.
+Channel Access client, blocking and asyncio. pvAccess client and server,
+blocking and asyncio; tested against p4p on both sides of the wire
+(`pytest tests/pva` needs `p4p` installed).

@@ -8,6 +8,7 @@
 mod ca;
 mod error;
 mod hub;
+mod pva;
 mod runtime;
 mod value;
 
@@ -36,5 +37,24 @@ fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ca::Snapshot>()?;
     m.add_class::<ca::ChannelInfo>()?;
     m.add_class::<hub::MonitorHub>()?;
+    m.add("PvaError", py.get_type::<pva::error::PvaError>())?;
+    m.add("PvaTimeout", py.get_type::<pva::error::PvaTimeout>())?;
+    m.add(
+        "PvaDisconnected",
+        py.get_type::<pva::error::PvaDisconnected>(),
+    )?;
+    m.add(
+        "PvaRemoteError",
+        py.get_type::<pva::error::PvaRemoteError>(),
+    )?;
+    m.add_class::<pva::value::Type>()?;
+    m.add_class::<pva::value::Value>()?;
+    m.add_class::<pva::client::PvaContext>()?;
+    m.add_class::<pva::client::PvaSubscription>()?;
+    m.add_class::<pva::server::ServerOperation>()?;
+    m.add_class::<pva::server::PvaWorkQueue>()?;
+    m.add_class::<pva::server::PvaSharedPV>()?;
+    m.add_class::<pva::server::PvaProvider>()?;
+    m.add_class::<pva::server::PvaServer>()?;
     Ok(())
 }
