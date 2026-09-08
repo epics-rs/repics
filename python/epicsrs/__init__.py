@@ -4,12 +4,13 @@ Front ends:
 
 * ``epicsrs.ca``  — blocking ``caget`` / ``caput`` / ``camonitor`` / ``cainfo`` / ``connect``
 * ``epicsrs.aio`` — the same, as coroutines for asyncio
+* ``epicsrs.pva`` — pvAccess client (``Context``), ``pva.asyncio``, ``pva.nt``, ``pva.server``
 
 Both return augmented values (see ``epicsrs.Augmented``) and share one
 default context built from the ``EPICS_CA_*`` environment on first use.
 """
 
-from . import aio, ca
+from . import aio, ca, pva
 from ._context import context
 from ._epicsrs import (
     CaChannel,
@@ -19,6 +20,10 @@ from ._epicsrs import (
     CaSubscription,
     CaTimeout,
     ChannelInfo,
+    PvaDisconnected,
+    PvaError,
+    PvaRemoteError,
+    PvaTimeout,
     Snapshot,
     __version__,
 )
@@ -35,6 +40,7 @@ __all__ = [
     "__version__",
     "aio",
     "ca",
+    "pva",
     "context",
     "CaChannel",
     "CaContext",
@@ -43,6 +49,10 @@ __all__ = [
     "CaSubscription",
     "CaTimeout",
     "ChannelInfo",
+    "PvaDisconnected",
+    "PvaError",
+    "PvaRemoteError",
+    "PvaTimeout",
     "Snapshot",
     "Augmented",
     "AugmentedArray",

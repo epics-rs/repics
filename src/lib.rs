@@ -37,5 +37,7 @@ fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_class::<pva::value::Type>()?;
     m.add_class::<pva::value::Value>()?;
+    m.add_class::<pva::client::PvaContext>()?;
+    m.add_class::<pva::client::PvaSubscription>()?;
     Ok(())
 }
