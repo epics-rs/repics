@@ -619,10 +619,13 @@ class NTURI:
         AV: dict[str, Any] = {k: v for k, v in (kws or {}).items() if v is not None}
         AV.update((n, v) for (n, _t), v in zip(self._args, args))
         AT = [a for a in self._args if a[0] in AV]
-        return Value(
-            self.buildType(AT),
-            {"scheme": scheme, "authority": authority, "path": path, "query": AV},
-        )
+        try:
+            return Value(
+                self.buildType(AT),
+                {"scheme": scheme, "authority": authority, "path": path, "query": AV},
+            )
+        except Exception as e:
+            raise ValueError(f"Unable to initialize NTURI {AT} from {AV} using {self._args}") from e
 
 
 _default_nt = {
