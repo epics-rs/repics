@@ -31,7 +31,7 @@ from .._epicsrs import CaError
 from .._monitor import Dispatcher, SubscriptionBase
 from .._dbr import request
 from .._ops import DEFAULT_TIMEOUT, collect, finish, info_or, put_value, values_for
-from .._value import CaNothing, augment
+from .._value import CAInfo, CaNothing, augment
 
 __all__ = [
     "caget",
