@@ -33,7 +33,7 @@ jobs:
 
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: pip install maturin pytest numpy
+      - run: pip install maturin pytest numpy p4p
       - run: maturin develop --release
       - run: pytest -v
         env:
