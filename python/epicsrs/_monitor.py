@@ -99,7 +99,10 @@ class Dispatcher:
     def shutdown(self) -> None:
         """Close every subscription and stop the drain."""
         with self.lock:
+            subs = list(self.subs.values())
             self.subs.clear()
+        for sub in subs:
+            sub._mark_closed()
         self.hub.close()
 
     def plan(self, batch: list[tuple[int, int, Any]]) -> list[tuple[SubscriptionBase, int, Any]]:
