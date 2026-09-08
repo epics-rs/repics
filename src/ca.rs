@@ -16,19 +16,19 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use epics_base_rs::server::snapshot::Snapshot as RsSnapshot;
-use epics_ca_rs::CaResult;
 use epics_ca_rs::client::{
     CaChannel as RsChannel, CaClient, ChannelInfo as RsChannelInfo,
     ConnectionEvent as RsConnectionEvent, EnumReadback, MonitorHandle, ReqCount,
 };
 use epics_ca_rs::protocol::{DBE_ALARM, DBE_LOG, DBE_VALUE, ECA_INTERNAL};
+use epics_ca_rs::{CaOp, CaResult};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{CaError, map_ca, map_ca_write};
+use crate::error::{CaError, access_denied, map_ca, map_ca_write};
 use crate::runtime::{block_on, bounded, into_py_future, runtime};
 use crate::value::{self, PutRequest};
 
@@ -68,17 +68,27 @@ struct GetRequest {
     enum_as_string: bool,
 }
 
-/// Wait for the channel to connect. An already-connected channel returns
-/// at once from its own state; only a pending one round-trips through the
-/// engine's coordinator (`wait_connected` always does, which costs a
-/// cross-thread hop per call).
-async fn ensure_connected(ch: &RsChannel) -> PyResult<()> {
-    if ch.native_field_type().is_ok() {
-        return Ok(());
+/// Wait for the channel to connect, then apply libca's access gate for
+/// `op` (`nciu::read`/`nciu::write`: ECA_NORDACCESS / ECA_NOWTACCESS).
+/// An already-connected channel returns at once from its own state; only
+/// a pending one round-trips through the engine's coordinator
+/// (`wait_connected` always does, which costs a cross-thread hop per call).
+async fn ensure_connected(ch: &RsChannel, op: CaOp) -> PyResult<()> {
+    if ch.native_field_type().is_err() {
+        ch.wait_connected(duration_or_forever(None))
+            .await
+            .map_err(map_ca)?;
     }
-    ch.wait_connected(duration_or_forever(None))
-        .await
-        .map_err(map_ca)
+    let rights = ch.info().await.map_err(map_ca)?.access_rights;
+    let allowed = match op {
+        CaOp::Write => rights.write,
+        _ => rights.read,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(access_denied(op))
+    }
 }
 
 /// The element cap a monitor asks for, same convention as [`read_count`].
@@ -715,7 +725,7 @@ impl CaChannel {
         timeout: Option<f64>,
     ) -> PyResult<Snapshot> {
         let snap = bounded(timeout, async {
-            ensure_connected(&ch).await?;
+            ensure_connected(&ch, CaOp::Read).await?;
             let native = ch.native_field_type().map_err(map_ca)?.ca_wire_type();
             let base = match req.dbr {
                 Some(b) => b,
@@ -739,7 +749,7 @@ impl CaChannel {
         timeout: Option<f64>,
     ) -> PyResult<()> {
         bounded(timeout, async {
-            ensure_connected(&ch).await?;
+            ensure_connected(&ch, CaOp::Write).await?;
             match (req, wait) {
                 (PutRequest::Str(s), true) => ch.put_string(&s).await,
                 (PutRequest::Str(s), false) => ch.put_string_nowait(&s).await,

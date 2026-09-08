@@ -5,7 +5,9 @@
 //! (`ECA_TIMEOUT`, `ECA_DISCONN`, `ECA_NOWTACCESS`, ...) without parsing
 //! the message.
 
-use epics_ca_rs::protocol::{ECA_DISCONN, ECA_TIMEOUT, eca_message};
+use epics_ca_rs::protocol::{
+    ECA_DISCONN, ECA_NORDACCESS, ECA_NOWTACCESS, ECA_TIMEOUT, eca_message,
+};
 use epics_ca_rs::{CaError as RsCaError, CaOp};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -32,6 +34,18 @@ create_exception!(
 
 pub fn timeout_err(secs: f64) -> PyErr {
     CaTimeout::new_err((format!("timed out after {secs} s"), ECA_TIMEOUT))
+}
+
+/// libca refuses in `nciu::read`/`nciu::write` when the cached access
+/// rights say no, with `ECA_NORDACCESS`/`ECA_NOWTACCESS`. epics-ca-rs has
+/// the same gate but reports it as a protocol error, so the status is
+/// decided here, before the library is asked.
+pub fn access_denied(op: CaOp) -> PyErr {
+    let code = match op {
+        CaOp::Write => ECA_NOWTACCESS,
+        _ => ECA_NORDACCESS,
+    };
+    CaError::new_err((eca_message(code).to_string(), code))
 }
 
 /// Map a read-side error (get, monitor, connect).
