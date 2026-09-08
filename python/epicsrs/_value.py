@@ -99,11 +99,15 @@ del _k
 
 
 class AugmentedFloat(Augmented, float):
+    __str__ = float.__repr__  # the bare value; the metadata is repr's
+
     def __repr__(self) -> str:
         return f"{float.__repr__(self)} <{self._meta_repr()}>"
 
 
 class AugmentedInt(Augmented, int):
+    __str__ = int.__repr__  # the bare value; the metadata is repr's
+
     def __repr__(self) -> str:
         return f"{int.__repr__(self)} <{self._meta_repr()}>"
 
@@ -124,6 +128,8 @@ class AugmentedArray(Augmented, numpy.ndarray):
 
 
 class AugmentedList(Augmented, list):
+    __str__ = list.__repr__  # the bare value; the metadata is repr's
+
     def __repr__(self) -> str:
         return f"{list.__repr__(self)} <{self._meta_repr()}>"
 
