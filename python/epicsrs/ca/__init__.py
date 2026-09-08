@@ -12,7 +12,6 @@ returned instead, as a ``CaNothing`` whose ``ok`` is False.
 
 from __future__ import annotations
 
-import threading
 from typing import Any, Callable
 
 from .._context import (
@@ -27,8 +26,8 @@ from .._context import (
 )
 from .._dbr import *  # noqa: F401,F403 - the libca vocabulary is part of this API
 from .._dbr import __all__ as _dbr_all
-from .._epicsrs import CaError
-from .._monitor import Dispatcher, SubscriptionBase
+from .._epicsrs import CaError, MonitorHub
+from .._monitor import SubscriptionBase, ThreadDispatcher
 from .._dbr import request
 from .._ops import DEFAULT_TIMEOUT, collect, finish, info_or, put_value, values_for
 from .._value import CAInfo, CaNothing, augment
@@ -147,39 +146,7 @@ def cainfo(pv: PVs, wait: bool = True, timeout: Any = DEFAULT_TIMEOUT, throw: bo
 # camonitor
 
 
-class _ThreadDispatcher(Dispatcher):
-    """Drains the hub on one daemon thread, started with the first
-    subscription, and calls back there."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._thread: threading.Thread | None = None
-
-    def started(self) -> None:
-        with self.lock:
-            if self._thread is not None:
-                return
-            self._thread = threading.Thread(target=self._run, name="epicsrs camonitor", daemon=True)
-            self._thread.start()
-
-    def _run(self) -> None:
-        while True:
-            batch = self.hub.recv_batch()
-            if batch is None:
-                return
-            for sub, kind, payload in self.plan(batch):
-                value = sub._event(kind, payload)
-                if value is not None:
-                    sub._deliver(value)
-
-    def shutdown(self) -> None:
-        super().shutdown()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(5.0)
-
-
-_dispatcher = _ThreadDispatcher()
+_dispatcher = ThreadDispatcher(MonitorHub(), "epicsrs camonitor")
 
 
 class Subscription(SubscriptionBase):

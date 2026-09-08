@@ -1,37 +1,24 @@
-//! pvAccess client: `PvaContext` and `PvaSubscription`.
+//! pvAccess client: `PvaContext`.
 //!
 //! Same two-flavour shape as `crate::ca`: every network method blocks with
 //! the GIL released or, as `*_async`, returns an asyncio awaitable. Both
-//! run on the one runtime in `crate::runtime`.
-//!
-//! A monitor's wire callback runs on a runtime worker, so it never touches
-//! Python: it decodes the frame, merges it against the previous value and
-//! pushes it onto a bounded queue that Python drains through `recv`. When
-//! the queue is full the newest update is squashed into the tail — newer
-//! values win, changed sets are unioned — which is the pvxs client rule;
-//! memory is bounded no matter how slowly Python drains.
+//! run on the one runtime in `crate::runtime`. Monitors are opened through
+//! `super::hub::PvaMonitorHub`.
 
-use std::collections::{HashMap, VecDeque};
-use std::io::Cursor;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::net::ToSocketAddrs;
+use std::sync::Arc;
 use std::time::Duration;
 
-use epics_pva_rs::client_native::ops_v2::{
-    MarkedRead, MonitorConnEvent, PutLeaf, SubscriptionHandle,
-};
+use epics_pva_rs::client_native::ops_v2::{MarkedRead, PutLeaf};
 use epics_pva_rs::client_native::{PvaClient, PvaClientBuilder};
 use epics_pva_rs::config::Endpoint;
-use epics_pva_rs::proto::{BitSet, ByteOrder};
+use epics_pva_rs::proto::BitSet;
 use epics_pva_rs::pv_request::PvRequestExpr;
-use epics_pva_rs::pvdata::encode::{
-    decode_pv_field_with_bitset, fill_unmarked_from_prior, marked_changed_bitset,
-};
+use epics_pva_rs::pvdata::encode::marked_changed_bitset;
 use epics_pva_rs::pvdata::{FieldDesc, PvField, ScalarValue};
-use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use tokio_util::sync::CancellationToken;
 
 use super::error::{PvaError, bounded, map_pva};
 use super::value::{Type, Value};
@@ -41,7 +28,7 @@ use crate::runtime::{block_on, into_py_future};
 /// op-timeout only has to be long enough never to fire first.
 const INNER_TIMEOUT: Duration = Duration::from_secs(3600);
 
-fn parse_request(request: Option<&str>) -> PyResult<Option<PvRequestExpr>> {
+pub(super) fn parse_request(request: Option<&str>) -> PyResult<Option<PvRequestExpr>> {
     match request {
         None => Ok(None),
         Some(s) if s.trim().is_empty() => Ok(None),
@@ -145,6 +132,12 @@ pub struct PvaContext {
 }
 
 impl PvaContext {
+    pub(super) fn client(&self) -> Arc<PvaClient> {
+        self.client.clone()
+    }
+}
+
+impl PvaContext {
     async fn do_get(
         client: Arc<PvaClient>,
         name: String,
@@ -234,52 +227,6 @@ impl PvaContext {
                 .map_err(map_pva)
         })
         .await
-    }
-
-    async fn do_monitor(
-        client: Arc<PvaClient>,
-        name: String,
-        request: Option<PvRequestExpr>,
-        limit: usize,
-    ) -> PyResult<PvaSubscription> {
-        let shared = Arc::new(Shared {
-            queue: Mutex::new(Queue {
-                items: VecDeque::new(),
-                limit,
-            }),
-            notify: tokio::sync::Notify::new(),
-        });
-        let pv_request = request
-            .unwrap_or_else(|| PvRequestExpr::parse("field()").expect("field() parses"))
-            .to_pv_field();
-        let mut decoder = Decoder::default();
-        let producer = shared.clone();
-        let conn = shared.clone();
-        let handle = client
-            .pvmonitor_raw_frames_handle_with_request(
-                &name,
-                pv_request,
-                move |desc: &FieldDesc, body, order: ByteOrder| {
-                    if let Some(u) = decoder.decode(desc, body.as_ref(), order) {
-                        producer.push_value(u);
-                    }
-                },
-                move |ev: MonitorConnEvent| {
-                    conn.push(match ev {
-                        MonitorConnEvent::Connected { peer } => Update::Connected(peer),
-                        MonitorConnEvent::Disconnected => Update::Disconnected,
-                        MonitorConnEvent::Finished => Update::Finished,
-                    });
-                },
-            )
-            .await
-            .map_err(map_pva)?;
-        Ok(PvaSubscription {
-            handle: Arc::new(tokio::sync::Mutex::new(Some(handle))),
-            shared,
-            closed: CancellationToken::new(),
-            name,
-        })
     }
 }
 
@@ -425,35 +372,6 @@ impl PvaContext {
         into_py_future(py, Self::do_connect(self.client.clone(), name, timeout))
     }
 
-    /// Subscribe. `limit` bounds the update queue Python drains through
-    /// `PvaSubscription.recv`; it defaults to the request's `queueSize`
-    /// record option, else 4.
-    #[pyo3(signature = (name, request=None, limit=None))]
-    fn monitor(
-        &self,
-        py: Python<'_>,
-        name: String,
-        request: Option<&str>,
-        limit: Option<usize>,
-    ) -> PyResult<PvaSubscription> {
-        let req = parse_request(request)?;
-        let limit = queue_limit(req.as_ref(), limit);
-        block_on(py, Self::do_monitor(self.client.clone(), name, req, limit))
-    }
-
-    #[pyo3(signature = (name, request=None, limit=None))]
-    fn monitor_async<'py>(
-        &self,
-        py: Python<'py>,
-        name: String,
-        request: Option<&str>,
-        limit: Option<usize>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let req = parse_request(request)?;
-        let limit = queue_limit(req.as_ref(), limit);
-        into_py_future(py, Self::do_monitor(self.client.clone(), name, req, limit))
-    }
-
     /// Tear down every channel. Live subscriptions see `disconnected`.
     fn close(&self, py: Python<'_>) {
         let client = self.client.clone();
@@ -461,7 +379,7 @@ impl PvaContext {
     }
 }
 
-fn queue_limit(req: Option<&PvRequestExpr>, explicit: Option<usize>) -> usize {
+pub(super) fn queue_limit(req: Option<&PvRequestExpr>, explicit: Option<usize>) -> usize {
     if let Some(n) = explicit {
         return n.max(1);
     }
@@ -491,279 +409,4 @@ fn put_leaves(value: &Value) -> PyResult<Vec<(String, PutLeaf)>> {
         .into_iter()
         .map(|(p, f)| (p, PutLeaf::Typed(f)))
         .collect())
-}
-
-// ---------------------------------------------------------------------------
-// Monitor queue
-// ---------------------------------------------------------------------------
-
-enum Update {
-    Value {
-        desc: Arc<FieldDesc>,
-        value: PvField,
-        changed: BitSet,
-    },
-    Connected(SocketAddr),
-    Disconnected,
-    Finished,
-}
-
-struct Queue {
-    items: VecDeque<Update>,
-    limit: usize,
-}
-
-struct Shared {
-    queue: Mutex<Queue>,
-    notify: tokio::sync::Notify,
-}
-
-impl Shared {
-    fn push(&self, u: Update) {
-        self.queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .items
-            .push_back(u);
-        self.notify.notify_one();
-    }
-
-    /// Squash into the tail when the queue holds `limit` value updates
-    /// and the tail is a value: newer wins, changed sets union.
-    fn push_value(&self, u: Update) {
-        let Update::Value {
-            desc,
-            value,
-            changed,
-        } = u
-        else {
-            return self.push(u);
-        };
-        let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
-        let values = q
-            .items
-            .iter()
-            .filter(|i| matches!(i, Update::Value { .. }))
-            .count();
-        if values >= q.limit {
-            if let Some(Update::Value {
-                desc: tdesc,
-                value: tvalue,
-                changed: tchanged,
-            }) = q.items.back_mut()
-            {
-                *tdesc = desc;
-                *tvalue = value;
-                for b in changed.iter() {
-                    tchanged.set(b);
-                }
-                drop(q);
-                self.notify.notify_one();
-                return;
-            }
-        }
-        q.items.push_back(Update::Value {
-            desc,
-            value,
-            changed,
-        });
-        drop(q);
-        self.notify.notify_one();
-    }
-
-    fn pop(&self) -> Option<Update> {
-        self.queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .items
-            .pop_front()
-    }
-}
-
-/// Per-subscription decode state: the last full value, so a partial
-/// update can be completed from it.
-#[derive(Default)]
-struct Decoder {
-    desc: Option<Arc<FieldDesc>>,
-    prior: Option<PvField>,
-}
-
-impl Decoder {
-    fn decode(&mut self, desc: &FieldDesc, body: &[u8], order: ByteOrder) -> Option<Update> {
-        let desc_arc = match &self.desc {
-            Some(d) if **d == *desc => d.clone(),
-            _ => {
-                let d = Arc::new(desc.clone());
-                self.desc = Some(d.clone());
-                self.prior = None;
-                d
-            }
-        };
-        let mut cur = Cursor::new(body);
-        let changed = BitSet::decode(&mut cur, order).ok()?;
-        let decoded = decode_pv_field_with_bitset(desc, &changed, 0, &mut cur, order).ok()?;
-        let full = match &self.prior {
-            Some(prior) => fill_unmarked_from_prior(desc, &changed, 0, decoded, prior),
-            None => decoded,
-        };
-        self.prior = Some(full.clone());
-        Some(Update::Value {
-            desc: desc_arc,
-            value: full,
-            changed,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PvaSubscription
-// ---------------------------------------------------------------------------
-
-/// A monitor. Python drains it by calling `recv`; nothing is delivered on
-/// a runtime thread. Each item is a `(kind, payload)` tuple: `("value",
-/// Value)`, `("connected", "host:port")`, `("disconnected", None)` or
-/// `("finished", None)`. `recv` returns `None` once closed.
-///
-/// `close` cancels the token before taking the handle lock, so a parked
-/// `recv` wakes and returns `None` rather than holding the lock forever.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
-pub struct PvaSubscription {
-    handle: Arc<tokio::sync::Mutex<Option<SubscriptionHandle>>>,
-    shared: Arc<Shared>,
-    closed: CancellationToken,
-    name: String,
-}
-
-impl PvaSubscription {
-    async fn do_recv(
-        shared: Arc<Shared>,
-        closed: CancellationToken,
-        timeout: Option<f64>,
-    ) -> PyResult<Option<Py<PyAny>>> {
-        let next = bounded(timeout, async {
-            loop {
-                if closed.is_cancelled() {
-                    return Ok(None);
-                }
-                if let Some(u) = shared.pop() {
-                    return Ok(Some(u));
-                }
-                tokio::select! {
-                    _ = shared.notify.notified() => {}
-                    _ = closed.cancelled() => return Ok(None),
-                }
-            }
-        })
-        .await?;
-        let Some(u) = next else {
-            return Ok(None);
-        };
-        Python::attach(|py| {
-            let item = match u {
-                Update::Value {
-                    desc,
-                    value,
-                    changed,
-                } => (
-                    "value",
-                    Value::from_parts(desc, value, changed).into_py_any(py)?,
-                ),
-                Update::Connected(peer) => ("connected", peer.to_string().into_py_any(py)?),
-                Update::Disconnected => ("disconnected", py.None()),
-                Update::Finished => ("finished", py.None()),
-            };
-            item.into_py_any(py).map(Some)
-        })
-    }
-
-    async fn do_close(
-        handle: Arc<tokio::sync::Mutex<Option<SubscriptionHandle>>>,
-        closed: CancellationToken,
-    ) {
-        closed.cancel();
-        if let Some(h) = handle.lock().await.take() {
-            h.stop_sync().await;
-        }
-    }
-
-    async fn with_handle<R>(
-        handle: Arc<tokio::sync::Mutex<Option<SubscriptionHandle>>>,
-        f: impl AsyncFnOnce(&SubscriptionHandle) -> R,
-    ) -> PyResult<R> {
-        match handle.lock().await.as_ref() {
-            Some(h) => Ok(f(h).await),
-            None => Err(PvaError::new_err("subscription is closed")),
-        }
-    }
-}
-
-#[pymethods]
-impl PvaSubscription {
-    #[getter]
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Next item, or `None` once closed. With a `timeout`, raises
-    /// `PvaTimeout` if nothing arrives in time.
-    #[pyo3(signature = (timeout=None))]
-    fn recv(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<Py<PyAny>>> {
-        block_on(
-            py,
-            Self::do_recv(self.shared.clone(), self.closed.clone(), timeout),
-        )
-    }
-
-    #[pyo3(signature = (timeout=None))]
-    fn recv_async<'py>(
-        &self,
-        py: Python<'py>,
-        timeout: Option<f64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        into_py_future(
-            py,
-            Self::do_recv(self.shared.clone(), self.closed.clone(), timeout),
-        )
-    }
-
-    fn pause(&self, py: Python<'_>) -> PyResult<()> {
-        block_on(
-            py,
-            Self::with_handle(self.handle.clone(), async |h| h.pause().await),
-        )
-    }
-
-    fn resume(&self, py: Python<'_>) -> PyResult<()> {
-        block_on(
-            py,
-            Self::with_handle(self.handle.clone(), async |h| h.resume().await),
-        )
-    }
-
-    /// Unsubscribe. A parked `recv` returns `None`.
-    fn close(&self, py: Python<'_>) {
-        block_on(py, Self::do_close(self.handle.clone(), self.closed.clone()));
-    }
-
-    fn close_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let (handle, closed) = (self.handle.clone(), self.closed.clone());
-        into_py_future(py, async move {
-            Self::do_close(handle, closed).await;
-            Ok(None::<bool>) // `()` would reach Python as an empty tuple
-        })
-    }
-
-    fn __enter__(slf: Py<Self>) -> Py<Self> {
-        slf
-    }
-
-    fn __exit__(
-        &self,
-        py: Python<'_>,
-        _exc_type: &Bound<'_, PyAny>,
-        _exc_value: &Bound<'_, PyAny>,
-        _traceback: &Bound<'_, PyAny>,
-    ) {
-        self.close(py);
-    }
 }

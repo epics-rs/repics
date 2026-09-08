@@ -15,12 +15,13 @@ the Normative Type helpers, ``epicsrs.pva.server`` the server side.
 
 from __future__ import annotations
 
-import threading
 from typing import Any, Callable
 
-from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaRemoteError, PvaSubscription, PvaTimeout, Type, Value
+from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, PvaRemoteError, PvaTimeout, Type, Value
+from .._monitor import ThreadDispatcher
 from . import nt
 from ._common import Cancelled, Disconnected, Finished, RemoteError, TimeoutError, Wrapping, dispatch, effective_conf, put_request
+from ._monitor import SubscriptionBase
 
 __all__ = [
     "Context",
@@ -44,12 +45,17 @@ def _is_list(x: Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
-class Subscription:
-    """A running monitor. ``cb(value)`` runs on the subscription's own thread.
+_dispatcher = ThreadDispatcher(PvaMonitorHub(), "epicsrs pvmonitor")
+
+
+class Subscription(SubscriptionBase):
+    """A running monitor. ``cb(value)`` runs on this flavour's one
+    dispatcher thread, shared by every monitor, or is pushed to ``queue``
+    (p4p style, anything with ``push`` or ``put``) when one is given.
 
     ``value`` is the unwrapped update, or a ``Disconnected()`` /
     ``Finished()`` instance when ``notify_disconnect`` is set. Updates are
-    squashed in Rust when this thread falls behind; the queue never grows.
+    squashed in Rust when the consumer falls behind; the queue never grows.
     """
 
     def __init__(
@@ -62,52 +68,11 @@ class Subscription:
         queue: Any,
         limit: int | None,
     ):
-        self.name = name
-        self._ctxt = ctxt
-        self._cb = cb
-        self._notify = notify_disconnect
         self._queue = queue
-        self._sub: PvaSubscription = ctxt._raw.monitor(name, request, limit)
-        self._thread = threading.Thread(target=self._run, name=f"pvmonitor {name}", daemon=True)
-        self._thread.start()
+        super().__init__(_dispatcher, ctxt, name, cb, request, notify_disconnect, limit)
 
-    def _run(self) -> None:
-        if self._notify:
-            dispatch(self._cb, Disconnected(), self._queue)
-        while True:
-            try:
-                item = self._sub.recv()
-            except Exception:  # noqa: BLE001 - a decode failure; keep draining until closed
-                continue
-            if item is None:
-                return
-            kind, payload = item
-            if kind == "value":
-                dispatch(self._cb, self._ctxt._wrapping.unwrap(payload, self.name), self._queue)
-            elif kind == "disconnected":
-                if self._notify:
-                    dispatch(self._cb, Disconnected(), self._queue)
-            elif kind == "finished":
-                if self._notify:
-                    dispatch(self._cb, Finished(), self._queue)
-                return
-
-    def pause(self) -> None:
-        self._sub.pause()
-
-    def resume(self) -> None:
-        self._sub.resume()
-
-    def close(self) -> None:
-        self._sub.close()
-        if threading.current_thread() is not self._thread:
-            self._thread.join()
-
-    def __enter__(self) -> "Subscription":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+    def _deliver(self, value: Any) -> None:
+        dispatch(self._cb, value, self._queue)
 
 
 class Context:
@@ -218,7 +183,7 @@ class Context:
         queue: Any = None,
         limit: int | None = None,
     ) -> Subscription:
-        """Subscribe; ``cb`` runs on a dedicated thread, or via ``queue.push`` if given.
+        """Subscribe; ``cb`` runs on the dispatcher thread, or via ``queue.push`` if given.
 
         ``limit`` bounds the Rust-side update queue (default: the request's
         ``queueSize``, else 4); beyond it the newest update is merged into

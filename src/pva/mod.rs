@@ -1,6 +1,8 @@
-//! pvAccess: `Type`/`Value`, the client `PvaContext`, and the server.
+//! pvAccess: `Type`/`Value`, the client `PvaContext` and `PvaMonitorHub`,
+//! and the server.
 
 pub mod client;
 pub mod error;
+pub mod hub;
 pub mod server;
 pub mod value;

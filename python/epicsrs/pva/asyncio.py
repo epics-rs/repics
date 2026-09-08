@@ -1,19 +1,23 @@
 """pvAccess client, asyncio flavour (``p4p.client.asyncio`` shaped).
 
 Every operation is a coroutine on the shared runtime; nothing blocks the
-event loop. ``monitor`` returns a ``Subscription`` driven by a task on the
-running loop; its callback may be a plain function or a coroutine function.
+event loop. ``monitor`` returns a ``Subscription`` driven by the loop's one
+dispatcher task; its callback may be a plain function or a coroutine
+function.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import weakref
 from typing import Any, Callable
 
-from .._epicsrs import PvaContext, PvaError, PvaSubscription, Type, Value
-from ._common import Disconnected, Finished, Wrapping, effective_conf, put_request
+from .._epicsrs import PvaContext, PvaError, PvaMonitorHub, Type, Value
+from .._monitor import LoopDispatcher, per_loop
+from ._common import Wrapping, effective_conf, put_request
 from ._common import log as _log
+from ._monitor import SubscriptionBase
 
 __all__ = ["Context", "Subscription"]
 
@@ -22,10 +26,18 @@ def _is_list(x: Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
-class Subscription:
-    """A running monitor driven by a task on the current loop.
+_dispatchers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, LoopDispatcher]" = weakref.WeakKeyDictionary()
 
-    A coroutine callback is awaited before the next update is taken, so a
+
+def _dispatcher() -> LoopDispatcher:
+    return per_loop(_dispatchers, lambda loop: LoopDispatcher(PvaMonitorHub(), loop, "epicsrs pvmonitor"))
+
+
+class Subscription(SubscriptionBase):
+    """A running monitor driven by the one dispatcher task of the loop
+    that created it.
+
+    A coroutine callback is awaited before the next item is taken, so a
     slow consumer back-pressures into the Rust queue (which squashes)
     instead of piling up Python objects.
     """
@@ -39,14 +51,7 @@ class Subscription:
         notify_disconnect: bool,
         limit: int | None,
     ):
-        self.name = name
-        self._ctxt = ctxt
-        self._cb = cb
-        self._notify = notify_disconnect
-        self._request = request
-        self._limit = limit
-        self._sub: PvaSubscription | None = None
-        self._task = asyncio.get_running_loop().create_task(self._run(), name=f"pvmonitor {name}")
+        super().__init__(_dispatcher(), ctxt, name, cb, request, notify_disconnect, limit)
 
     async def _deliver(self, item: Any) -> None:
         try:
@@ -57,39 +62,6 @@ class Subscription:
             raise
         except Exception:  # noqa: BLE001 - a callback must not kill the drain loop
             _log.exception("pva monitor callback failed")
-
-    async def _run(self) -> None:
-        self._sub = await self._ctxt._raw.monitor_async(self.name, self._request, self._limit)
-        if self._notify:
-            await self._deliver(Disconnected())
-        while True:
-            try:
-                item = await self._sub.recv_async()
-            except PvaError:
-                continue
-            if item is None:
-                return
-            kind, payload = item
-            if kind == "value":
-                await self._deliver(self._ctxt._wrapping.unwrap(payload, self.name))
-            elif kind == "disconnected":
-                if self._notify:
-                    await self._deliver(Disconnected())
-            elif kind == "finished":
-                if self._notify:
-                    await self._deliver(Finished())
-                return
-
-    def close(self) -> None:
-        if self._sub is not None:
-            self._sub.close()
-        self._task.cancel()
-
-    def __enter__(self) -> "Subscription":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
 
 
 class Context:

@@ -1,18 +1,23 @@
-"""Subscriptions over one ``MonitorHub`` per front end.
+"""Subscriptions over one hub per front end.
 
-The hub runs every subscription as a task on the extension's runtime and
-queues what they produce. A single dispatcher drains it a batch at a time
-and hands each item to its ``Subscription`` by id, so a thousand monitors
-cost one waiting thread (or task), not a thousand, and one GIL acquisition
-per batch rather than per update.
+A hub (``MonitorHub`` for Channel Access, ``PvaMonitorHub`` for pvAccess)
+runs every subscription inside the extension and queues what they
+produce. A single dispatcher drains it a batch at a time and hands each
+item to its subscription by id, so a thousand monitors cost one waiting
+thread (or task), not a thousand, and one GIL acquisition per batch rather
+than per update.
 
-The front ends supply the waiting: ``epicsrs.ca`` drains on a daemon
-thread and calls back there; ``epicsrs.aio`` drains in a task on the loop
-that created the subscription and awaits coroutine callbacks.
+``ThreadDispatcher`` drains on a daemon thread and calls back there;
+``LoopDispatcher`` drains in a task on an asyncio loop and awaits
+coroutine callbacks. What a subscription makes of an item (``_event``)
+and how its callback is invoked (``_deliver``) belong to the front end.
+The Channel Access subscription is below; ``epicsrs.pva._monitor`` has
+the pvAccess one.
 """
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import sys
 import threading
@@ -32,7 +37,7 @@ from ._dbr import (
     DBR_ENUM_STR,
     ECA_TIMEOUT,
 )
-from ._epicsrs import CaChannel, MonitorHub, Snapshot
+from ._epicsrs import MonitorHub, Snapshot
 from ._value import CaNothing, augment
 
 MONITOR_DATATYPES = (None, str, DBR_ENUM_STR, DBR_CHAR_STR, DBR_CHAR_BYTES, DBR_CHAR_UNICODE)
@@ -75,15 +80,16 @@ class Dispatcher:
     closed and the thread joined while the interpreter is still whole.
     """
 
-    def __init__(self) -> None:
-        self.hub = MonitorHub()
-        self.subs: dict[int, SubscriptionBase] = {}
+    def __init__(self, hub: Any) -> None:
+        self.hub = hub
+        self.subs: dict[int, Any] = {}
         self.lock = threading.Lock()
         _live.add(self)
 
-    def add(self, sub: SubscriptionBase, ch: CaChannel, args: dict[str, Any]) -> int:
+    def add(self, sub: Any, *args: Any, **kw: Any) -> int:
+        """Open ``hub.subscribe(*args, **kw)`` for ``sub``; its id."""
         with self.lock:
-            sid = self.hub.subscribe(ch, **args)
+            sid = self.hub.subscribe(*args, **kw)
             self.subs[sid] = sub
         self.started()
         return sid
@@ -105,11 +111,12 @@ class Dispatcher:
             sub._mark_closed()
         self.hub.close()
 
-    def plan(self, batch: list[tuple[int, int, Any]]) -> list[tuple[SubscriptionBase, int, Any]]:
+    def plan(self, batch: list[tuple[int, int, Any]]) -> list[tuple[Any, int, Any]]:
         """Pair each item with its subscription; for a subscription that
-        does not want every update, collapse a run of values into the
-        last one and count the rest as dropped."""
-        out: list[tuple[SubscriptionBase, int, Any]] = []
+        does not want every update (``all_updates`` False), collapse a run
+        of values (kind 0 in both hubs) into the last one and count the
+        rest as dropped."""
+        out: list[tuple[Any, int, Any]] = []
         last_value: dict[int, int] = {}
         with self.lock:
             for sid, kind, payload in batch:
@@ -127,6 +134,78 @@ class Dispatcher:
                     last_value.pop(sid, None)
                 out.append((sub, kind, payload))
         return out
+
+
+class ThreadDispatcher(Dispatcher):
+    """Drains the hub on one daemon thread, started with the first
+    subscription, and calls back there."""
+
+    def __init__(self, hub: Any, name: str) -> None:
+        super().__init__(hub)
+        self._name = name
+        self._thread: threading.Thread | None = None
+
+    def started(self) -> None:
+        with self.lock:
+            if self._thread is not None:
+                return
+            self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            batch = self.hub.recv_batch()
+            if batch is None:
+                return
+            for sub, kind, payload in self.plan(batch):
+                value = sub._event(kind, payload)
+                if value is not None:
+                    sub._deliver(value)
+
+    def shutdown(self) -> None:
+        super().shutdown()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(5.0)
+
+
+class LoopDispatcher(Dispatcher):
+    """Drains the hub in one task on the loop that made the first
+    subscription; a coroutine callback is awaited before the next item."""
+
+    def __init__(self, hub: Any, loop: asyncio.AbstractEventLoop, name: str) -> None:
+        super().__init__(hub)
+        self._loop = loop
+        self._name = name
+        self._task: asyncio.Task[None] | None = None
+
+    def started(self) -> None:
+        if self._task is None:
+            self._task = self._loop.create_task(self._run(), name=self._name)
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                batch = await self.hub.recv_batch_async()
+                if batch is None:
+                    return
+                for sub, kind, payload in self.plan(batch):
+                    value = sub._event(kind, payload)
+                    if value is not None:
+                        await sub._deliver(value)
+        finally:
+            # The loop is going away (task cancelled at loop close): nothing
+            # will drain the hub again, so let its subscriptions go.
+            self.shutdown()
+
+
+def per_loop(registry: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Any]", make: Callable[[asyncio.AbstractEventLoop], Any]) -> Any:
+    """The running loop's dispatcher, made on first use."""
+    loop = asyncio.get_running_loop()
+    d = registry.get(loop)
+    if d is None:
+        d = registry[loop] = make(loop)
+    return d
 
 
 _live: "weakref.WeakSet[Dispatcher]" = weakref.WeakSet()
@@ -194,15 +273,13 @@ class SubscriptionBase:
         self.id = dispatcher.add(
             self,
             ch,
-            {
-                "mask": self.mask,
-                "enum_as_string": datatype in (str, DBR_ENUM_STR),
-                "float_as_string": datatype is str,
-                "count": count,
-                "connect_timeout": timeout,
-                "values": values,
-                "values_max_count": values_max_count,
-            },
+            mask=self.mask,
+            enum_as_string=datatype in (str, DBR_ENUM_STR),
+            float_as_string=datatype is str,
+            count=count,
+            connect_timeout=timeout,
+            values=values,
+            values_max_count=values_max_count,
         )
 
     def _event(self, kind: int, payload: Any) -> Any | None:
@@ -277,4 +354,4 @@ class SubscriptionBase:
         return f"{type(self).__name__}({self.name!r}, {state})"
 
 
-__all__ = ["Dispatcher", "SubscriptionBase", "MONITOR_DATATYPES", "Snapshot"]
+__all__ = ["Dispatcher", "ThreadDispatcher", "LoopDispatcher", "per_loop", "SubscriptionBase", "MONITOR_DATATYPES", "Snapshot"]

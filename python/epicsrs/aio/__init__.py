@@ -25,8 +25,8 @@ from .._context import (
 )
 from .._dbr import *  # noqa: F401,F403 - the libca vocabulary is part of this API
 from .._dbr import __all__ as _dbr_all
-from .._epicsrs import CaError
-from .._monitor import Dispatcher, SubscriptionBase
+from .._epicsrs import CaError, MonitorHub
+from .._monitor import LoopDispatcher, SubscriptionBase, per_loop
 from .._dbr import request
 from .._ops import DEFAULT_TIMEOUT, collect, finish, info_or, put_value, values_for
 from .._value import CAInfo, CaNothing, augment
@@ -133,44 +133,11 @@ async def cainfo(pv: PVs, wait: bool = True, timeout: Any = DEFAULT_TIMEOUT, thr
 # camonitor
 
 
-class _LoopDispatcher(Dispatcher):
-    """Drains the hub in one task on the loop that made the first
-    subscription; a coroutine callback is awaited before the next item."""
-
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__()
-        self._loop = loop
-        self._task: asyncio.Task[None] | None = None
-
-    def started(self) -> None:
-        if self._task is None:
-            self._task = self._loop.create_task(self._run(), name="epicsrs camonitor")
-
-    async def _run(self) -> None:
-        try:
-            while True:
-                batch = await self.hub.recv_batch_async()
-                if batch is None:
-                    return
-                for sub, kind, payload in self.plan(batch):
-                    value = sub._event(kind, payload)
-                    if value is not None:
-                        await sub._deliver(value)
-        finally:
-            # The loop is going away (task cancelled at loop close): nothing
-            # will drain the hub again, so let its subscriptions go.
-            self.shutdown()
+_dispatchers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, LoopDispatcher]" = weakref.WeakKeyDictionary()
 
 
-_dispatchers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopDispatcher]" = weakref.WeakKeyDictionary()
-
-
-def _dispatcher() -> _LoopDispatcher:
-    loop = asyncio.get_running_loop()
-    d = _dispatchers.get(loop)
-    if d is None:
-        d = _dispatchers[loop] = _LoopDispatcher(loop)
-    return d
+def _dispatcher() -> LoopDispatcher:
+    return per_loop(_dispatchers, lambda loop: LoopDispatcher(MonitorHub(), loop, "epicsrs camonitor"))
 
 
 class Subscription(SubscriptionBase):
