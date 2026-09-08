@@ -482,6 +482,15 @@ impl PvEntry {
 pub struct PySource {
     inner: SharedSource,
     entries: Mutex<HashMap<String, Arc<PvEntry>>>,
+    /// The PV each attached channel was created against, one element per
+    /// channel, keyed by channel name. `SharedSource` resolves a channel
+    /// close by looking the name up in its table, so a PV removed while
+    /// clients hold channels never sees its last-disconnect edge; keeping
+    /// the attachment here makes remove-then-close (p4p's recipe for a
+    /// `close(sync=True)` that can complete) fire it. Only when a removed
+    /// PV keeps live channels while another PV is served under the same
+    /// name is a close ambiguous; it is then charged oldest-first.
+    attached: Mutex<HashMap<String, VecDeque<Arc<PvEntry>>>>,
 }
 
 impl PySource {
@@ -723,12 +732,30 @@ impl ChannelSource for PySource {
         self.inner.notify_monitor_start(name, ctx, start)
     }
 
-    fn notify_channel_open(&self, name: &str, ctx: &ChannelContext) {
-        self.inner.notify_channel_open(name, ctx)
+    fn notify_channel_open(&self, name: &str, _ctx: &ChannelContext) {
+        if let Some(entry) = self.entry(name) {
+            self.attached
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(name.to_string())
+                .or_default()
+                .push_back(entry.clone());
+            entry.pv.attach_channel();
+        }
     }
 
-    fn notify_channel_close(&self, name: &str, ctx: &ChannelContext) {
-        self.inner.notify_channel_close(name, ctx)
+    fn notify_channel_close(&self, name: &str, _ctx: &ChannelContext) {
+        let entry = {
+            let mut attached = self.attached.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = attached.get_mut(name).and_then(|q| q.pop_front());
+            if attached.get(name).is_some_and(|q| q.is_empty()) {
+                attached.remove(name);
+            }
+            entry
+        };
+        if let Some(entry) = entry {
+            entry.pv.detach_channel();
+        }
     }
 
     fn monitor_watermarks(
@@ -843,6 +870,7 @@ impl PvaProvider {
             source: Arc::new(PySource {
                 inner: SharedSource::new(),
                 entries: Mutex::new(HashMap::new()),
+                attached: Mutex::new(HashMap::new()),
             }),
         }
     }
