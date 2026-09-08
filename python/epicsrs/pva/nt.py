@@ -31,6 +31,7 @@ __all__ = [
     "NTNDArray",
     "NTURI",
     "NTBase",
+    "ntenum",
     "alarm",
     "timeStamp",
     "defaultNT",
@@ -283,6 +284,18 @@ class NTScalar(NTBase):
             V["value"] = py
 
 
+class ntenum(AugmentedInt):
+    """p4p ``ntenum``: an int whose ``str()`` is the choice label."""
+
+    choice: str | None = None
+
+    def __str__(self) -> str:
+        return self.choice or int.__repr__(self)
+
+    def __repr__(self) -> str:
+        return f"ntenum({int.__repr__(self)}, {self.choice})"
+
+
 class NTEnum(NTBase):
     """``epics:nt/NTEnum:1.0``: an index into a list of choices."""
 
@@ -333,7 +346,7 @@ class NTEnum(NTBase):
         meta = _scalar_meta(V)
         meta["datatype"] = "enum"
         meta["enums"] = choices
-        out = augment(_Snap(idx, **meta))
+        out = ntenum(idx)._store(_Snap(idx, **meta))
         out.choice = choices[idx] if 0 <= idx < len(choices) else None
         return _finish(out, V)
 
