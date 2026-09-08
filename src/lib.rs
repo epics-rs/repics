@@ -7,6 +7,7 @@
 
 mod ca;
 mod error;
+mod pva;
 mod runtime;
 mod value;
 
@@ -24,5 +25,17 @@ fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ca::CaSubscription>()?;
     m.add_class::<ca::Snapshot>()?;
     m.add_class::<ca::ChannelInfo>()?;
+    m.add("PvaError", py.get_type::<pva::error::PvaError>())?;
+    m.add("PvaTimeout", py.get_type::<pva::error::PvaTimeout>())?;
+    m.add(
+        "PvaDisconnected",
+        py.get_type::<pva::error::PvaDisconnected>(),
+    )?;
+    m.add(
+        "PvaRemoteError",
+        py.get_type::<pva::error::PvaRemoteError>(),
+    )?;
+    m.add_class::<pva::value::Type>()?;
+    m.add_class::<pva::value::Value>()?;
     Ok(())
 }

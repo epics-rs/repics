@@ -15,11 +15,13 @@ crate-type = ["cdylib"]
 [dependencies]
 epics-ca-rs = "0.28.1"
 epics-base-rs = "0.28.1"
+epics-pva-rs = "0.28.1"
 pyo3 = { version = "0.27", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 numpy = "0.27"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 tokio-util = "0.7"
+bytes = "1"
 
 [profile.release]
 strip = "symbols"
