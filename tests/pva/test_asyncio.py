@@ -89,15 +89,18 @@ def test_client_monitor_with_coroutine_callback(p4p_pvs, p4p_conf, pvname):
 def test_client_slow_coroutine_backpressures(p4p_pvs, p4p_conf, pvname):
     async def main():
         got = []
+        entered = asyncio.Event()
         gate = asyncio.Event()
 
         async def cb(v):
+            entered.set()
             await gate.wait()
             got.append(int(v))
 
         async with Context("pva", conf=p4p_conf, useenv=False) as C:
             with C.monitor(pvname("integer"), cb, limit=2):
-                await asyncio.sleep(0.2)
+                # Post only once the monitor is running (see test_client).
+                await asyncio.wait_for(entered.wait(), 5.0)
                 for i in range(50):
                     p4p_pvs[1]["integer"].post(100 + i)
                 await asyncio.sleep(0.2)

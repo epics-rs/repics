@@ -211,13 +211,18 @@ def test_monitor(ctxt, p4p_pvs):
 def test_monitor_squashes_when_slow(ctxt, p4p_pvs):
     _, pvs, _ = p4p_pvs
     got = []
+    entered = threading.Event()
     gate = threading.Event()
 
     def cb(v):
+        entered.set()
         gate.wait(5.0)
         got.append(int(v))
 
     with ctxt.monitor(name("integer"), cb, limit=2):
+        # Post only once the monitor is running: the p4p server can hold a
+        # post that lands in its START window until the next post.
+        assert entered.wait(5.0)
         for i in range(50):
             pvs["integer"].post(100 + i)
         time.sleep(0.2)
