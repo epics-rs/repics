@@ -1,0 +1,44 @@
+record(ai, "$(P)ai") {
+    field(VAL, "1.5")
+    field(EGU, "mm")
+    field(PREC, "3")
+    field(HOPR, "10")
+    field(LOPR, "-10")
+    field(HIHI, "9")
+    field(HHSV, "MAJOR")
+    field(LOLO, "-9")
+    field(LLSV, "MAJOR")
+    field(PINI, "YES")
+}
+record(ao, "$(P)ao") {
+    field(VAL, "0")
+    field(EGU, "V")
+    field(PREC, "2")
+    field(DRVH, "5")
+    field(DRVL, "-5")
+    field(PINI, "YES")
+}
+record(longout, "$(P)long") {
+    field(VAL, "42")
+    field(PINI, "YES")
+}
+record(stringout, "$(P)str") {
+    field(VAL, "hello")
+    field(PINI, "YES")
+}
+record(mbbo, "$(P)mbbo") {
+    field(ZRST, "Zero")
+    field(ONST, "One")
+    field(TWST, "Two")
+    field(VAL, "1")
+    field(PINI, "YES")
+}
+record(waveform, "$(P)wf") {
+    field(FTVL, "DOUBLE")
+    field(NELM, "8")
+}
+record(calc, "$(P)cnt") {
+    field(SCAN, ".1 second")
+    field(CALC, "A+1")
+    field(INPA, "$(P)cnt.VAL")
+}
