@@ -207,15 +207,24 @@ def fail_op(op: Any, exc: BaseException) -> None:
             pass
 
 
-def deliver(item: Any) -> None:
-    """Route one queue item to its PV; a dead PV fails the operation."""
+def deliver(item: Any) -> bool:
+    """Route one queue item to its PV; a dead PV fails the operation.
+
+    Returns False on the queue's end-of-stream ``None``. The item is
+    consumed here, not in the caller's loop, so a handler that returns
+    without ``done()`` drops the operation (and fails it) at once rather
+    than when the next event happens to arrive.
+    """
+    if item is None:
+        return False
     ref, kind, op = item
     pv = ref()
     if pv is None:
         if op is not None:
             op.done(error="SharedPV no longer exists")
-        return
+        return True
     pv._dispatch(kind, op)
+    return True
 
 
 class StaticProvider:

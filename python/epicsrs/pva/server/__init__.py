@@ -25,11 +25,8 @@ class WorkQueue:
         self._thread.start()
 
     def _run(self) -> None:
-        while True:
-            item = self._raw.recv()
-            if item is None:
-                return
-            deliver(item)
+        while deliver(self._raw.recv()):
+            pass
 
     def stop(self) -> None:
         self._raw.stop()

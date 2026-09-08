@@ -28,11 +28,8 @@ class _TaskQueue:
         self._task = loop.create_task(self._drain(), name="epicsrs.pva.server")
 
     async def _drain(self) -> None:
-        while True:
-            item = await self._raw.recv_async()
-            if item is None:
-                return
-            deliver(item)
+        while deliver(await self._raw.recv_async()):
+            pass
 
     def stop(self) -> None:
         self._raw.stop()
