@@ -13,9 +13,9 @@ name = "_epicsrs"
 crate-type = ["cdylib"]
 
 [dependencies]
-epics-ca-rs = "0.28.1"
-epics-base-rs = "0.28.1"
-epics-pva-rs = "0.28.1"
+epics-ca-rs = { path = "../epics-rs/crates/epics-ca-rs" }
+epics-base-rs = { path = "../epics-rs/crates/epics-base-rs" }
+epics-pva-rs = { path = "../epics-rs/crates/epics-pva-rs" }
 pyo3 = { version = "0.27", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 numpy = "0.27"
