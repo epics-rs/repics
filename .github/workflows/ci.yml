@@ -6,30 +6,50 @@ on:
   pull_request:
 
 env:
-  EPICS_RS_VERSION: "0.28.1"
+  # Cargo.toml depends on ../epics-rs by path until epics-pva-rs 0.28.2
+  # ships MonitorRing::bounded / SquashTail; this ref is what it builds
+  # against, and softioc-rs is built from the same checkout.
+  EPICS_RS_REF: feat/pva-monitor-ring-squash
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: epicsrs
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: epicsrs
+      - uses: actions/checkout@v4
+        with:
+          repository: epics-rs/epics-rs
+          ref: ${{ env.EPICS_RS_REF }}
+          path: epics-rs
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            epicsrs
+            epics-rs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Resolve the epics-rs commit
+        id: epics-rs
+        run: echo "sha=$(git -C ../epics-rs rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Cache softioc-rs
         id: ioc-cache
         uses: actions/cache@v4
         with:
-          path: ioc-bin
-          key: softioc-rs-${{ env.EPICS_RS_VERSION }}-${{ runner.os }}
+          path: epics-rs/target/release/softioc-rs
+          key: softioc-rs-${{ steps.epics-rs.outputs.sha }}-${{ runner.os }}
       - name: Build softioc-rs
         if: steps.ioc-cache.outputs.cache-hit != 'true'
-        run: cargo install epics-ca-rs --version ${{ env.EPICS_RS_VERSION }} --bin softioc-rs --root ioc-bin
+        run: cargo build --release --manifest-path ../epics-rs/crates/epics-ca-rs/Cargo.toml --bin softioc-rs
 
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
@@ -37,7 +57,7 @@ jobs:
       - run: maturin develop --release
       - run: pytest -v
         env:
-          EPICSRS_SOFTIOC: ${{ github.workspace }}/ioc-bin/bin/softioc-rs
+          EPICSRS_SOFTIOC: ${{ github.workspace }}/epics-rs/target/release/softioc-rs
 
   wheels:
     needs: test
@@ -47,14 +67,22 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: epicsrs
+      - uses: actions/checkout@v4
+        with:
+          repository: epics-rs/epics-rs
+          ref: ${{ env.EPICS_RS_REF }}
+          path: epics-rs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: PyO3/maturin-action@v1
         with:
+          working-directory: epicsrs
           args: --release --out dist
           manylinux: "2_28"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: dist
+          path: epicsrs/dist
