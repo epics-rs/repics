@@ -84,15 +84,19 @@ def test_get_list(ctxt):
 
 def test_put_scalar_and_dict(ctxt, p4p_pvs):
     _, pvs, _ = p4p_pvs
-    ctxt.put(name("scalar"), 2.5)
-    assert ctxt.get(name("scalar")) == 2.5
-    ctxt.put(name("scalar"), {"value": 3.0, "alarm": {"severity": 2}})
+    try:
+        ctxt.put(name("scalar"), 2.5)
+        assert ctxt.get(name("scalar")) == 2.5
+        ctxt.put(name("scalar"), {"value": 3.0, "alarm": {"severity": 2}})
+        v = ctxt.get(name("scalar"))
+        assert (v, v.severity) == (3.0, 2)
+        # the server's stored value must carry both fields (a marked-delta put)
+        cur = pvs["scalar"].current()
+        assert (cur.raw.value, cur.raw.alarm.severity) == (3.0, 2)
+    finally:
+        ctxt.put(name("scalar"), {"value": 1.5, "alarm": {"severity": 1}})
     v = ctxt.get(name("scalar"))
-    assert (v, v.severity) == (3.0, 2)
-    # the server's stored value must carry both fields (a marked-delta put)
-    cur = pvs["scalar"].current()
-    assert (cur.raw.value, cur.raw.alarm.severity) == (3.0, 2)
-    ctxt.put(name("scalar"), 1.5)
+    assert (v, v.severity, v.raw.timeStamp.secondsPastEpoch) == (1.5, 1, 1700000000)
 
 
 def test_put_value_marks_only(ctxt):

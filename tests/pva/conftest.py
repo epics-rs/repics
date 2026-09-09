@@ -30,7 +30,9 @@ class _Handler:
         if isinstance(val, (int, float)) and val > 100:
             op.done(error="too big")
             return
-        pv.post(v)
+        # Store the marked delta only: posting the augmented value would
+        # re-stamp timeStamp from the put, which carries none.
+        pv.post(v.raw)
         op.done()
 
     def rpc(self, pv, op):
