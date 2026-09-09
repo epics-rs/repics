@@ -156,6 +156,8 @@ away more than half of them. Medians of the blocking epicsrs client moved betwee
 on `get` across runs of the same command (thread placement inside the
 four cores); each table is one run.
 
+Reference documentation: [docs/index.md](docs/index.md).
+
 ## Building
 
 ```sh
