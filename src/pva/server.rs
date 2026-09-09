@@ -768,9 +768,13 @@ impl PvaSharedPV {
 
     /// Apply the marked fields of `value` and deliver them to every
     /// subscriber. An unmarked Value is a no-op, as in p4p.
-    fn post(&self, value: &Value) -> PyResult<()> {
+    fn post(&self, py: Python<'_>, value: &Value) -> PyResult<()> {
         let (desc, field, marks) = value.snapshot()?;
-        self.entry.post(desc, field, marks)
+        // Store-and-deliver touches no Python object, so run it without
+        // the GIL: a thread posting in a loop then hands the interpreter
+        // to the handler threads and in-process client callbacks on every
+        // post instead of once per switch interval (p4p does the same).
+        py.detach(|| self.entry.post(desc, field, marks))
     }
 
     /// The current value carrying the open value's marks and every
