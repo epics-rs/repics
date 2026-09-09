@@ -24,6 +24,7 @@ fn ca_message(status: u32) -> &'static str {
 fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     runtime::configure();
+    runtime::init_logging();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(ca_message, m)?)?;
     m.add("CaError", py.get_type::<error::CaError>())?;

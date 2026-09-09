@@ -43,6 +43,18 @@ pub fn configure() {
     pyo3_async_runtimes::tokio::init(builder);
 }
 
+/// Send the libraries' `tracing` output to stderr when `EPICSRS_LOG` is
+/// set; its value is an env-filter directive list (`epics_pva_rs=debug`),
+/// as `PVXS_LOG` is for pvxs. Unset, nothing is logged.
+pub fn init_logging() {
+    if let Ok(spec) = std::env::var("EPICSRS_LOG") {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(spec)
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+}
+
 pub fn runtime() -> &'static tokio::runtime::Runtime {
     pyo3_async_runtimes::tokio::get_runtime()
 }
