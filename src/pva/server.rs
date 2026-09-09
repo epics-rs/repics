@@ -381,20 +381,37 @@ fn spawn_pump<T: Send + 'static>(
 // PvEntry / PySource
 // ---------------------------------------------------------------------------
 
+/// What a `PvEntry` guards under one lock, held across store-and-deliver
+/// in `post` and across register-and-snapshot in `subscribe`, so a
+/// subscriber sees every post either in its seed or in its ring, never
+/// neither.
+struct PvState {
+    subs: Vec<Arc<Ring>>,
+    /// The union of the open value's marks and every post's since, which
+    /// is what p4p's `current()` reports: pvxs keeps the marks on the
+    /// stored Value, and its `post` is `current.assign(val)`. The library
+    /// stores a bare `PvField`, so the marks live here.
+    marks: BitSet,
+}
+
 /// The Rust side of one Python `SharedPV`.
 struct PvEntry {
     pv: SharedPV,
-    /// Held across store-and-deliver in `post` and across
-    /// register-and-snapshot in `subscribe`, so a subscriber sees every
-    /// post either in its seed or in its ring, never neither.
-    subs: Mutex<Vec<Arc<Ring>>>,
+    state: Mutex<PvState>,
     events: mpsc::UnboundedSender<Event>,
     token: Arc<Py<PyAny>>,
 }
 
 impl PvEntry {
-    fn lock_subs(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Ring>>> {
-        self.subs.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, PvState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn open(&self, desc: FieldDesc, field: PvField, marks: BitSet) -> PyResult<()> {
+        let mut state = self.lock_state();
+        self.pv.open(desc, field).map_err(map_pva)?;
+        state.marks = marks;
+        Ok(())
     }
 
     fn send(&self, kind: EventKind) -> Result<(), OpError> {
@@ -407,7 +424,7 @@ impl PvEntry {
     }
 
     fn post(&self, desc: Arc<FieldDesc>, field: PvField, marks: BitSet) -> PyResult<()> {
-        let mut subs = self.lock_subs();
+        let mut state = self.lock_state();
         let Some(opened) = self.pv.introspection() else {
             return Err(PvaError::new_err("SharedPV not open"));
         };
@@ -416,13 +433,12 @@ impl PvEntry {
                 "post() value type differs from the open() type; close() first",
             ));
         }
-        // An unmarked Value posts everything: a no-op post is never what
-        // a caller of post() meant.
-        let marks = if marks.is_empty() {
-            all_marks(&desc)
-        } else {
-            marks
-        };
+        // p4p: `SharedPV::post` is `current.assign(val)` plus a subscriber
+        // post that pvxs drops when it touches no requested field, so an
+        // unmarked Value changes nothing and reaches no subscriber.
+        if marks.is_empty() {
+            return Ok(());
+        }
         let prior = self
             .pv
             .current()
@@ -430,7 +446,10 @@ impl PvEntry {
         let merged = fill_unmarked_from_prior(&desc, &marks, 0, field, &prior);
         let marked = changed_bitset_paths(&desc, &marks);
         self.pv.try_post_checked(merged.clone()).map_err(map_pva)?;
-        subs.retain(|ring| {
+        for bit in marks.iter() {
+            state.marks.set(bit);
+        }
+        state.subs.retain(|ring| {
             ring.post(MonitorUpdate {
                 value: merged.clone(),
                 marked: Some(marked.clone()),
@@ -442,7 +461,11 @@ impl PvEntry {
     }
 
     fn close(&self) {
-        let rings = std::mem::take(&mut *self.lock_subs());
+        let rings = {
+            let mut state = self.lock_state();
+            state.marks = BitSet::new();
+            std::mem::take(&mut state.subs)
+        };
         self.pv.close();
         for ring in rings {
             ring.finish();
@@ -451,10 +474,10 @@ impl PvEntry {
 
     /// Register a subscriber and snapshot the seed under one lock.
     fn subscribe(&self, limit: usize) -> Option<(PvField, Arc<Ring>)> {
-        let mut subs = self.lock_subs();
+        let mut state = self.lock_state();
         let initial = self.pv.current()?;
         let ring = Ring::new(limit);
-        subs.push(ring.clone());
+        state.subs.push(ring.clone());
         Some((initial, ring))
     }
 
@@ -788,7 +811,10 @@ impl PvaSharedPV {
         pv.on_put(|_, _| Err("unreachable: PUT is routed to Python".into()));
         let entry = Arc::new(PvEntry {
             pv: pv.clone(),
-            subs: Mutex::new(Vec::new()),
+            state: Mutex::new(PvState {
+                subs: Vec::new(),
+                marks: BitSet::new(),
+            }),
             events: queue.tx.clone(),
             token: Arc::new(token),
         });
@@ -809,11 +835,8 @@ impl PvaSharedPV {
 
     /// Declare the type and initial value; clients may connect afterwards.
     fn open(&self, value: &Value) -> PyResult<()> {
-        let (desc, field, _) = value.snapshot()?;
-        self.entry
-            .pv
-            .open(desc.as_ref().clone(), field)
-            .map_err(map_pva)
+        let (desc, field, marks) = value.snapshot()?;
+        self.entry.open(desc.as_ref().clone(), field, marks)
     }
 
     /// Drop the value and force-disconnect every client.
@@ -826,18 +849,24 @@ impl PvaSharedPV {
         self.entry.pv.is_open()
     }
 
-    /// Apply the marked fields of `value` (all of them when nothing is
-    /// marked) and deliver them to every subscriber.
+    /// Apply the marked fields of `value` and deliver them to every
+    /// subscriber. An unmarked Value is a no-op, as in p4p.
     fn post(&self, value: &Value) -> PyResult<()> {
         let (desc, field, marks) = value.snapshot()?;
         self.entry.post(desc, field, marks)
     }
 
-    /// The current value, or `None` while closed.
+    /// The current value carrying the open value's marks and every
+    /// post's since (p4p `current()`), or `None` while closed.
     fn current(&self) -> Option<Value> {
+        let state = self.entry.lock_state();
         let desc = self.entry.pv.introspection()?;
         let field = self.entry.pv.current()?;
-        Some(Value::from_parts(Arc::new(desc), field, BitSet::new()))
+        Some(Value::from_parts(
+            Arc::new(desc),
+            field,
+            state.marks.clone(),
+        ))
     }
 
     /// The opened type, or `None` while closed.

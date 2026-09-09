@@ -276,3 +276,34 @@ def test_post_type_mismatch_is_rejected():
         pv.post(NTScalar("d").wrap(2.0))
     with pytest.raises(Exception, match="not open"):
         SharedPV(nt=NTScalar("i")).post(1)
+
+
+def test_current_keeps_the_marks_and_an_unmarked_post_is_a_noop():
+    nt = NTScalar("d", display=True)
+    pv = SharedPV(nt=nt, initial=1.0)
+    opened = set(pv.current().raw.changedSet())
+    assert "value" in opened
+    V = pv.current().raw
+    V.unmark()
+    V["display.description"] = "d"
+    pv.post(V)
+    assert set(pv.current().raw.changedSet()) == opened | {"display.description"}
+    assert pv.current().raw["display.description"] == "d"
+    U = pv.current().raw
+    U["value"] = 99.0
+    U.unmark()
+    got = []
+    with Server(providers=[{P + "marks": pv}], isolate=True) as S, \
+            Context("pva", conf=S.conf(), useenv=False) as C, \
+            C.monitor(P + "marks", lambda v: got.append(float(v))):
+        assert _wait(lambda: len(got) >= 1)
+        pv.post(U)
+        pv.post(2.0)
+        assert _wait(lambda: len(got) >= 2)
+    assert got == [1.0, 2.0]
+    assert pv.current() == 2.0
+    posted = set(nt.wrap(2.0).changedSet())
+    assert set(pv.current().raw.changedSet()) == opened | {"display.description"} | posted
+    pv.close()
+    pv.open(V)
+    assert set(pv.current().raw.changedSet()) == {"display.description"}
