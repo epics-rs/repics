@@ -20,6 +20,14 @@ fn ca_message(status: u32) -> &'static str {
     epics_ca_rs::protocol::eca_message(status)
 }
 
+/// Wait up to `timeout` seconds for the runtime to settle every asyncio
+/// future it still owes; true when it did. Interpreter shutdown calls this
+/// so no runtime thread touches a finalized interpreter.
+#[pyfunction]
+fn _wait_idle(py: Python<'_>, timeout: f64) -> bool {
+    py.detach(|| runtime::wait_idle(std::time::Duration::from_secs_f64(timeout.max(0.0))))
+}
+
 #[pymodule]
 fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
@@ -27,6 +35,7 @@ fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     runtime::init_logging();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(ca_message, m)?)?;
+    m.add_function(wrap_pyfunction!(_wait_idle, m)?)?;
     m.add("CaError", py.get_type::<error::CaError>())?;
     m.add("CaTimeout", py.get_type::<error::CaTimeout>())?;
     m.add("CaDisconnected", py.get_type::<error::CaDisconnected>())?;

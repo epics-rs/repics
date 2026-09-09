@@ -37,7 +37,7 @@ from ._dbr import (
     DBR_ENUM_STR,
     ECA_TIMEOUT,
 )
-from ._epicsrs import MonitorHub, Snapshot
+from ._epicsrs import MonitorHub, Snapshot, _wait_idle
 from ._value import CaNothing, augment
 
 MONITOR_DATATYPES = (None, str, DBR_ENUM_STR, DBR_CHAR_STR, DBR_CHAR_BYTES, DBR_CHAR_UNICODE)
@@ -214,6 +214,10 @@ _live: "weakref.WeakSet[Dispatcher]" = weakref.WeakSet()
 def _shutdown_all() -> None:
     for d in list(_live):
         d.shutdown()
+    # Closing the hubs settles the asyncio futures that were waiting on
+    # them; let the runtime post those outcomes while the interpreter is
+    # still whole, or its threads would attach to a finalized one.
+    _wait_idle(1.0)
 
 
 atexit.register(_shutdown_all)

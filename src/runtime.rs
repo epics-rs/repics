@@ -11,12 +11,15 @@
 //! re-enter `block_on` from inside the runtime.
 
 use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Condvar, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
+use tokio::sync::oneshot;
 use tokio::task::JoinError;
 
 use crate::error::timeout_err;
@@ -98,8 +101,159 @@ where
             done.call_method1("set_result", (value,))?;
             Ok(done)
         }
-        None => pyo3_async_runtimes::tokio::future_into_py(py, fut),
+        None => hand_to_asyncio(py, fut),
     }
+}
+
+/// Python-bound completions the runtime still owes: one per future handed
+/// to asyncio, from the hand-over until its outcome has been posted to the
+/// loop or its cancellation noticed. `wait_idle` lets interpreter shutdown
+/// wait for the count to reach zero, so no runtime thread attaches to an
+/// interpreter that is already finalized.
+static IN_FLIGHT: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+struct InFlight;
+
+impl InFlight {
+    fn new() -> Self {
+        *IN_FLIGHT.0.lock().unwrap() += 1;
+        InFlight
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let mut n = IN_FLIGHT.0.lock().unwrap();
+        *n -= 1;
+        if *n == 0 {
+            IN_FLIGHT.1.notify_all();
+        }
+    }
+}
+
+/// Block until the runtime owes asyncio nothing, or `timeout` passes;
+/// true when idle. Call with the GIL released: the completions need it.
+pub fn wait_idle(timeout: Duration) -> bool {
+    let (lock, cv) = &IN_FLIGHT;
+    let g = lock.lock().unwrap();
+    let (g, _) = cv.wait_timeout_while(g, timeout, |n| *n > 0).unwrap();
+    *g == 0
+}
+
+/// Done callback of the asyncio future: a cancel from Python drops the
+/// Rust future.
+#[pyclass]
+struct CancelRelay {
+    cancel_tx: Option<oneshot::Sender<()>>,
+}
+
+#[pymethods]
+impl CancelRelay {
+    fn __call__(&mut self, fut: &Bound<'_, PyAny>) -> PyResult<()> {
+        if fut.call_method0("cancelled")?.is_truthy()? {
+            if let Some(tx) = self.cancel_tx.take() {
+                let _ = tx.send(());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Runs on the loop: settle the future unless it was cancelled meanwhile.
+#[pyclass]
+struct Completor;
+
+#[pymethods]
+impl Completor {
+    fn __call__(
+        &self,
+        fut: &Bound<'_, PyAny>,
+        method: &str,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        if fut.call_method0("cancelled")?.is_truthy()? {
+            return Ok(());
+        }
+        fut.call_method1(method, (value,))?;
+        Ok(())
+    }
+}
+
+/// Run `fut` on the runtime and settle an asyncio future with its outcome
+/// (pyo3_async_runtimes' `future_into_py`, with the in-flight accounting
+/// above). The outcome is posted from a blocking thread so a worker never
+/// waits for the GIL, and that thread holds the in-flight guard until it
+/// has posted, which is what `wait_idle` waits for.
+fn hand_to_asyncio<'py, F, T>(py: Python<'py>, mut fut: Pin<Box<F>>) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'a> IntoPyObject<'a> + Send + 'static,
+{
+    let locals = pyo3_async_runtimes::tokio::get_current_locals(py)?;
+    let py_fut = locals.event_loop(py).call_method0("create_future")?;
+    let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+    py_fut.call_method1(
+        "add_done_callback",
+        (CancelRelay {
+            cancel_tx: Some(cancel_tx),
+        },),
+    )?;
+    let target: Py<PyAny> = py_fut.clone().unbind();
+    let guard = InFlight::new();
+    runtime().spawn(async move {
+        let inner = runtime().spawn(async move {
+            tokio::select! {
+                biased;
+                r = &mut fut => Some(r),
+                c = &mut cancel_rx => match c {
+                    Ok(()) => None,
+                    // The asyncio future went away without settling; nobody
+                    // can cancel any more, so run to completion.
+                    Err(_) => Some(fut.await),
+                },
+            }
+        });
+        let result = match inner.await {
+            Ok(r) => r,
+            Err(e) => Some(Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "rust future failed: {e}"
+            )))),
+        };
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let Some(result) = result else {
+                return;
+            };
+            // SAFETY: a plain flag read; the only defence left when the
+            // interpreter has gone before `wait_idle` could run.
+            if unsafe { pyo3::ffi::Py_IsInitialized() } == 0 {
+                return;
+            }
+            Python::attach(|py| {
+                let fut = target.bind(py);
+                if fut
+                    .call_method0("cancelled")
+                    .and_then(|c| c.is_truthy())
+                    .unwrap_or(true)
+                {
+                    return;
+                }
+                let (method, value) = match result.and_then(|v| v.into_py_any(py)) {
+                    Ok(v) => ("set_result", v),
+                    Err(e) => ("set_exception", e.into_value(py).into_any()),
+                };
+                let kwargs = PyDict::new(py);
+                let _ = kwargs.set_item("context", locals.context(py));
+                // A closed loop refuses the call; the outcome is then moot.
+                let _ = locals.event_loop(py).call_method(
+                    "call_soon_threadsafe",
+                    (Completor, fut, method, value),
+                    Some(&kwargs),
+                );
+            });
+        });
+    });
+    Ok(py_fut)
 }
 
 /// Bound `fut` by `timeout` seconds; `None` means wait forever.
