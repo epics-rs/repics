@@ -81,6 +81,56 @@ def test_get_list(ctxt):
     assert got == [7, "hello"]
     assert [g.name for g in got] == [name("integer"), name("string")]
 
+def test_get_list_reports_each_entry(ctxt):
+    with pytest.raises(PvaTimeout):
+        ctxt.get([name("nope"), name("string")], timeout=0.3)
+    got = ctxt.get([name("nope"), name("string")], timeout=0.3, throw=False)
+    assert isinstance(got[0], PvaTimeout)
+    assert got[1] == "hello"
+    with pytest.raises(ValueError):
+        ctxt.get([name("string")], request=[None, None])
+
+
+def test_get_list_runs_as_one_batch(ctxt):
+    # five searches that each time out after 0.3 s overlap: one batch ends
+    # near 0.3 s, a sequential loop could not end before 1.5 s
+    t0 = time.monotonic()
+    got = ctxt.get([name(f"nope{i}") for i in range(5)], timeout=0.3, throw=False)
+    elapsed = time.monotonic() - t0
+    assert all(isinstance(g, PvaTimeout) for g in got)
+    assert elapsed < 1.0, elapsed
+
+
+def test_put_list_mixes_values_and_bare_values(ctxt):
+    V = ctxt.get(name("integer")).raw
+    V.unmark()
+    V.value = 12
+    try:
+        assert ctxt.put([name("integer"), name("scalar")], [V, 2.5]) == [None, None]
+        assert ctxt.get([name("integer"), name("scalar")]) == [12, 2.5]
+    finally:
+        ctxt.put([name("integer"), name("scalar")], [7, 1.5])
+    with pytest.raises(ValueError):
+        ctxt.put([name("integer"), name("scalar")], [1])
+
+
+def test_put_list_reports_each_entry(ctxt):
+    # an entry that fails while its current value is read, one the handler
+    # refuses, and one that succeeds, in one call
+    got = ctxt.put([name("nope"), name("integer"), name("scalar")], [1, 1000, 2.5], timeout=0.3, throw=False)
+    try:
+        assert isinstance(got[0], PvaTimeout)
+        assert isinstance(got[1], PvaRemoteError)
+        assert got[2] is None
+        assert ctxt.get([name("integer"), name("scalar")]) == [7, 2.5]
+        with pytest.raises(PvaRemoteError):
+            ctxt.put([name("integer"), name("scalar")], [1000, 3.5])
+        # throw=True raises after every entry was attempted
+        assert ctxt.get(name("scalar")) == 3.5
+    finally:
+        ctxt.put(name("scalar"), 1.5)
+
+
 
 def test_put_scalar_and_dict(ctxt, p4p_pvs):
     _, pvs, _ = p4p_pvs

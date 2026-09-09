@@ -19,10 +19,11 @@ use epics_pva_rs::pvdata::encode::marked_changed_bitset;
 use epics_pva_rs::pvdata::{FieldDesc, PvField, ScalarValue};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 
 use super::error::{PvaError, bounded, map_pva};
 use super::value::{Type, Value};
-use crate::runtime::{block_on, into_py_future};
+use crate::runtime::{block_on, into_py_future, join_all, results_to_py};
 
 /// Ops carry their own deadline (`bounded`), so the client's internal
 /// op-timeout only has to be long enough never to fire first.
@@ -271,6 +272,69 @@ impl PvaContext {
         into_py_future(py, Self::do_get(self.client.clone(), name, req, timeout))
     }
 
+    /// Read every name concurrently, each with its own `request` (one per
+    /// name) and the same `timeout`. One entry per name: a `Value` or the
+    /// exception.
+    #[pyo3(signature = (names, requests, timeout=None))]
+    fn get_many<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+        requests: Vec<Option<String>>,
+        timeout: Option<f64>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        if names.len() != requests.len() {
+            return Err(PyValueError::new_err(format!(
+                "{} names need {} requests, got {}",
+                names.len(),
+                names.len(),
+                requests.len()
+            )));
+        }
+        let mut futs = Vec::with_capacity(names.len());
+        for (name, request) in names.into_iter().zip(requests) {
+            let req = parse_request(request.as_deref())?;
+            futs.push(Self::do_get(self.client.clone(), name, req, timeout));
+        }
+        let results = block_on(py, join_all(futs, join_error));
+        results_to_py(py, results)
+    }
+
+    /// Write every `(name, value)` pair concurrently, each with its own
+    /// `request`. One entry per name: `None` on success, else the exception.
+    #[pyo3(signature = (names, values, requests, timeout=None))]
+    fn put_many<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+        values: Vec<PyRef<'py, Value>>,
+        requests: Vec<Option<String>>,
+        timeout: Option<f64>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        if names.len() != values.len() || names.len() != requests.len() {
+            return Err(PyValueError::new_err(format!(
+                "{} names need {} values and requests, got {} and {}",
+                names.len(),
+                names.len(),
+                values.len(),
+                requests.len()
+            )));
+        }
+        let mut futs = Vec::with_capacity(names.len());
+        for ((name, value), request) in names.into_iter().zip(&values).zip(requests) {
+            let leaves = put_leaves(value)?;
+            let req = parse_request(request.as_deref())?;
+            let client = self.client.clone();
+            futs.push(async move {
+                Self::do_put(client, name, leaves, req, timeout).await?;
+                // `None` in the list, not an empty tuple
+                Ok::<Option<bool>, PyErr>(None)
+            });
+        }
+        let results = block_on(py, join_all(futs, join_error));
+        results_to_py(py, results)
+    }
+
     #[pyo3(signature = (name, timeout=None))]
     fn info(&self, py: Python<'_>, name: String, timeout: Option<f64>) -> PyResult<Type> {
         block_on(py, Self::do_info(self.client.clone(), name, timeout))
@@ -396,6 +460,11 @@ pub(super) fn queue_limit(req: Option<&PvRequestExpr>, explicit: Option<usize>) 
             })
     });
     from_request.unwrap_or(4).max(1)
+}
+
+/// A runtime task that panicked, as the PVA family reports it.
+fn join_error(e: tokio::task::JoinError) -> PyErr {
+    PvaError::new_err(format!("task failed: {e}"))
 }
 
 fn put_leaves(value: &Value) -> PyResult<Vec<(String, PutLeaf)>> {

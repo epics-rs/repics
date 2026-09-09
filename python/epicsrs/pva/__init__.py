@@ -113,11 +113,25 @@ class Context:
                 raise
             return e
 
+    def _settle(self, result: Any, name: str, throw: bool) -> Any:
+        """One entry of a batch: the exception itself, or the unwrapped value."""
+        if isinstance(result, BaseException):
+            if throw:
+                raise result
+            return result
+        return self._one(lambda: self._wrapping.unwrap(result, name), throw)
+
     def get(self, name: Any, request: Any = None, timeout: float | None = 5.0, throw: bool = True) -> Any:
-        """Read ``name`` (or each of a list). With ``throw=False`` an error is returned, not raised."""
+        """Read ``name`` (or each of a list, as one concurrent batch).
+
+        With ``throw=False`` an error is returned, not raised; in a list it
+        takes the place of that entry.
+        """
         if _is_list(name):
-            reqs = request if _is_list(request) else [request] * len(name)
-            return [self.get(n, r, timeout, throw) for n, r in zip(name, reqs)]
+            names = list(name)
+            reqs = list(request) if _is_list(request) else [request] * len(names)
+            results = self._raw.get_many(names, reqs, timeout)
+            return [self._settle(r, n, throw) for r, n in zip(results, names)]
         return self._one(
             lambda: self._wrapping.unwrap(self._raw.get(name, request, timeout), name), throw
         )
@@ -144,10 +158,7 @@ class Context:
             if not _is_list(values) or len(values) != len(name):
                 raise ValueError(f"{len(name)} PVs need a list of {len(name)} values")
             reqs = request if _is_list(request) else [request] * len(name)
-            return [
-                self.put(n, v, r, timeout, throw, process, wait, get)
-                for n, v, r in zip(name, values, reqs)
-            ]
+            return self._put_many(list(name), list(values), list(reqs), timeout, throw, process, wait, get)
 
         def one() -> None:
             req = put_request(request, process, wait)
@@ -159,6 +170,53 @@ class Context:
             self._raw.put(name, V, req, timeout)
 
         return self._one(one, throw)
+
+    def _put_many(
+        self,
+        names: list[str],
+        values: list[Any],
+        reqs: list[Any],
+        timeout: float | None,
+        throw: bool,
+        process: Any,
+        wait: bool | None,
+        get: bool,
+    ) -> list[Any]:
+        """``put`` over lists: the current values are read as one batch, then
+        every write is issued as one batch. An entry that fails at either
+        step is that exception (``throw=False``) or raises (``throw=True``)."""
+        results: list[Any] = [None] * len(names)
+        pending = list(range(len(names)))
+        req_strs = [put_request(r, process, wait) for r in reqs]
+        need = [i for i in pending if not isinstance(values[i], Value)]
+        if need:
+            if get:
+                current = self._raw.get_many([names[i] for i in need], [None] * len(need), timeout)
+            else:
+                current = [
+                    self._one(lambda i=i: Value(self._raw.info(names[i], timeout)), False)
+                    for i in need
+                ]
+            for i, cur in zip(need, current):
+                if isinstance(cur, BaseException):
+                    if throw:
+                        raise cur
+                    results[i] = cur
+                    pending.remove(i)
+                else:
+                    values[i] = self._wrapping.assign(cur, values[i])
+        if pending:
+            done = self._raw.put_many(
+                [names[i] for i in pending],
+                [values[i] for i in pending],
+                [req_strs[i] for i in pending],
+                timeout,
+            )
+            for i, r in zip(pending, done):
+                if isinstance(r, BaseException) and throw:
+                    raise r
+                results[i] = r
+        return results
 
     def rpc(self, name: str, value: Value, request: Any = None, timeout: float | None = 5.0, throw: bool = True) -> Any:
         """Call ``name`` with argument ``value`` (a ``Value``, see ``nt.NTURI``)."""

@@ -22,14 +22,15 @@ use epics_ca_rs::client::{
 };
 use epics_ca_rs::protocol::{DBE_ALARM, DBE_LOG, DBE_VALUE, ECA_INTERNAL};
 use epics_ca_rs::{CaOp, CaResult};
-use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{CaError, access_denied, map_ca, map_ca_write};
-use crate::runtime::{block_on, bounded, into_py_future, runtime};
+use crate::runtime::{
+    block_on, bounded, into_py_future, join_all, results_to_py, results_to_py_owned,
+};
 use crate::value::{self, PutRequest};
 
 /// `None` means no deadline. tokio clamps far-future instants itself.
@@ -101,49 +102,9 @@ pub(crate) fn monitor_count(ch: &RsChannel, count: i64) -> CaResult<Option<u32>>
     })
 }
 
-/// Run every future concurrently on the runtime; results keep input order.
-async fn join_all<T, F>(futs: Vec<F>) -> Vec<PyResult<T>>
-where
-    T: Send + 'static,
-    F: Future<Output = PyResult<T>> + Send + 'static,
-{
-    let handles: Vec<_> = futs.into_iter().map(|f| runtime().spawn(f)).collect();
-    let mut out = Vec::with_capacity(handles.len());
-    for h in handles {
-        out.push(match h.await {
-            Ok(r) => r,
-            Err(e) => Err(CaError::new_err((
-                format!("task failed: {e}"),
-                ECA_INTERNAL,
-            ))),
-        });
-    }
-    out
-}
-
-/// A list of results where a failure is the exception object itself, so the
-/// Python side can raise the first one (`throw=True`) or turn each into a
-/// `CaNothing` (`throw=False`).
-fn results_to_py<'py, T>(py: Python<'py>, results: Vec<PyResult<T>>) -> PyResult<Bound<'py, PyList>>
-where
-    T: for<'a> IntoPyObject<'a>,
-{
-    let items = results
-        .into_iter()
-        .map(|r| match r {
-            Ok(v) => v.into_py_any(py),
-            Err(e) => Ok(e.into_value(py).into_any()),
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-    PyList::new(py, items)
-}
-
-/// [`results_to_py`] from a runtime task: takes the GIL for the conversion.
-fn results_to_py_owned<T>(results: Vec<PyResult<T>>) -> PyResult<Py<PyList>>
-where
-    T: for<'a> IntoPyObject<'a>,
-{
-    Python::attach(|py| results_to_py(py, results).map(Bound::unbind))
+/// A runtime task that panicked, as the CA family reports it.
+fn join_error(e: tokio::task::JoinError) -> PyErr {
+    CaError::new_err((format!("task failed: {e}"), ECA_INTERNAL))
 }
 
 // ---------------------------------------------------------------------------
@@ -542,7 +503,10 @@ impl CaContext {
         channels: Vec<PyRef<'py, CaChannel>>,
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyList>> {
-        let results = block_on(py, join_all(Self::wait_futs(&channels, timeout)));
+        let results = block_on(
+            py,
+            join_all(Self::wait_futs(&channels, timeout), join_error),
+        );
         results_to_py(py, results)
     }
 
@@ -554,7 +518,9 @@ impl CaContext {
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let futs = Self::wait_futs(&channels, timeout);
-        into_py_future(py, async move { results_to_py_owned(join_all(futs).await) })
+        into_py_future(py, async move {
+            results_to_py_owned(join_all(futs, join_error).await)
+        })
     }
 
     /// Read every channel concurrently, each connecting first, with the
@@ -577,7 +543,10 @@ impl CaContext {
             form,
             enum_as_string,
         };
-        let results = block_on(py, join_all(Self::get_futs(&channels, req, count, timeout)));
+        let results = block_on(
+            py,
+            join_all(Self::get_futs(&channels, req, count, timeout), join_error),
+        );
         results_to_py(py, results)
     }
 
@@ -599,7 +568,9 @@ impl CaContext {
             enum_as_string,
         };
         let futs = Self::get_futs(&channels, req, count, timeout);
-        into_py_future(py, async move { results_to_py_owned(join_all(futs).await) })
+        into_py_future(py, async move {
+            results_to_py_owned(join_all(futs, join_error).await)
+        })
     }
 
     /// Write every channel concurrently. One entry per channel: `None` on
@@ -614,7 +585,7 @@ impl CaContext {
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyList>> {
         let futs = Self::put_futs(&channels, &values, wait, timeout)?;
-        let results = block_on(py, join_all(futs));
+        let results = block_on(py, join_all(futs, join_error));
         results_to_py(py, results)
     }
 
@@ -628,7 +599,9 @@ impl CaContext {
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let futs = Self::put_futs(&channels, &values, wait, timeout)?;
-        into_py_future(py, async move { results_to_py_owned(join_all(futs).await) })
+        into_py_future(py, async move {
+            results_to_py_owned(join_all(futs, join_error).await)
+        })
     }
 }
 

@@ -317,6 +317,16 @@ class PvaContext:
     def get_async(
         self, name: str, request: str | None = None, timeout: float | None = None
     ) -> Awaitable[Value]: ...
+    def get_many(
+        self, names: Sequence[str], requests: Sequence[str | None], timeout: float | None = None
+    ) -> list[Value | BaseException]: ...
+    def put_many(
+        self,
+        names: Sequence[str],
+        values: Sequence[Value],
+        requests: Sequence[str | None],
+        timeout: float | None = None,
+    ) -> list[BaseException | None]: ...
     def info(self, name: str, timeout: float | None = None) -> Type: ...
     def info_async(self, name: str, timeout: float | None = None) -> Awaitable[Type]: ...
     def put(

@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
+use tokio::task::JoinError;
 
 use crate::error::timeout_err;
 
@@ -101,4 +103,54 @@ where
             Err(_) => Err(timeout_err(secs)),
         },
     }
+}
+
+/// Run every future concurrently on the runtime; results keep input order.
+/// A task that panicked reports through `on_join_error`, so each front end
+/// raises its own exception family.
+pub(crate) async fn join_all<T, F>(
+    futs: Vec<F>,
+    on_join_error: fn(JoinError) -> PyErr,
+) -> Vec<PyResult<T>>
+where
+    T: Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    let handles: Vec<_> = futs.into_iter().map(|f| runtime().spawn(f)).collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        out.push(match h.await {
+            Ok(r) => r,
+            Err(e) => Err(on_join_error(e)),
+        });
+    }
+    out
+}
+
+/// A list of results where a failure is the exception object itself, so the
+/// Python side can raise the first one (`throw=True`) or return each in
+/// place (`throw=False`).
+pub(crate) fn results_to_py<'py, T>(
+    py: Python<'py>,
+    results: Vec<PyResult<T>>,
+) -> PyResult<Bound<'py, PyList>>
+where
+    T: for<'a> IntoPyObject<'a>,
+{
+    let items = results
+        .into_iter()
+        .map(|r| match r {
+            Ok(v) => v.into_py_any(py),
+            Err(e) => Ok(e.into_value(py).into_any()),
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    PyList::new(py, items)
+}
+
+/// [`results_to_py`] from a runtime task: takes the GIL for the conversion.
+pub(crate) fn results_to_py_owned<T>(results: Vec<PyResult<T>>) -> PyResult<Py<PyList>>
+where
+    T: for<'a> IntoPyObject<'a>,
+{
+    Python::attach(|py| results_to_py(py, results).map(Bound::unbind))
 }
