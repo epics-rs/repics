@@ -11,13 +11,12 @@
 //!
 //! PV state (open/close, current value, channel hooks, forced disconnect
 //! on close) lives in `epics_pva_rs`'s `SharedPV`/`SharedSource`. Monitor
-//! subscribers are kept here instead, because the library's outbox
-//! carries a bare `PvField`, so a post could only ever say "everything
-//! changed". `Ring` carries the posted value together with its changed
-//! paths, squashes into the tail when full (newest value wins, changed
-//! sets union, the lost update's paths land in `overrun`), and a pump task
-//! feeds the server's `MonitorStream` one update at a time, so a slow
-//! client holds back nothing but its own ring.
+//! subscribers are kept here instead, because the library's `SharedPV`
+//! queues a bare `PvField`, so a post could only ever say "everything
+//! changed". Each subscriber is a library `MonitorRing` of
+//! `MonitorUpdate` — the posted value with its changed paths — which the
+//! wire layer reads directly as its `MonitorStream`: a post is one hop,
+//! and a slow client holds back nothing but its own ring.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -29,7 +28,7 @@ use epics_pva_rs::pvdata::encode::{changed_bitset_paths, fill_unmarked_from_prio
 use epics_pva_rs::pvdata::{FieldDesc, PvField, RpcReply};
 use epics_pva_rs::server_native::config::ClientCredentials;
 use epics_pva_rs::server_native::runtime::PvaServer as RsServer;
-use epics_pva_rs::server_native::shared_pv::{SharedPV, SharedSource};
+use epics_pva_rs::server_native::shared_pv::{MonitorOutbox, MonitorRing, SharedPV, SharedSource};
 use epics_pva_rs::server_native::source::{
     AccessChecked, AccessGate, ChannelContext, ChannelInvalidator, ChannelSource, MonitorOptions,
     MonitorStream, MonitorUpdate, OpError, RPC_NOT_IMPLEMENTED, SourceRead, SubscriptionSeed,
@@ -39,12 +38,12 @@ use epics_pva_rs::server_native::{CompositeSource, DynSource, PvaServerConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::error::{PvaError, map_pva};
 use super::value::{Type, Value};
-use crate::runtime::{block_on, into_py_future, runtime};
+use crate::runtime::{block_on, into_py_future};
 
 /// Credentials for the trait's context-free entry points (`put_value`,
 /// `rpc`), which the wire layer never uses.
@@ -262,119 +261,35 @@ impl PvaWorkQueue {
 }
 
 // ---------------------------------------------------------------------------
-// Monitor ring
+// Monitor subscribers
 // ---------------------------------------------------------------------------
 
-struct RingInner {
-    items: VecDeque<MonitorUpdate>,
-    limit: usize,
-    producer_done: bool,
-    receiver_gone: bool,
+/// One monitor subscriber's producer endpoint. The wire layer takes the
+/// ring itself as its `MonitorStream`, and a full ring folds a newer
+/// update into its tail by `MonitorUpdate`'s `SquashTail` rule: newest
+/// value, changed sets united, the overlap as `overrun`. Two shapes,
+/// because `ChannelSource` has both a marked and a plain subscribe.
+enum Subscriber {
+    Marked(MonitorOutbox<MonitorUpdate>),
+    Plain(MonitorOutbox<PvField>),
 }
 
-/// A bounded per-subscriber queue of marked updates with pvxs
-/// squash-to-tail semantics.
-struct Ring {
-    inner: Mutex<RingInner>,
-    notify: Notify,
-}
-
-fn union(a: &mut Vec<String>, b: &[String]) {
-    for p in b {
-        if !a.contains(p) {
-            a.push(p.clone());
+impl Subscriber {
+    /// False once the client's ring is gone, so the owner drops it.
+    fn post(&self, value: &PvField, marked: &[String]) -> bool {
+        match self {
+            Subscriber::Marked(outbox) => outbox.post(
+                MonitorUpdate {
+                    value: value.clone(),
+                    marked: Some(marked.to_vec()),
+                    type_changed: false,
+                    overrun: Vec::new(),
+                },
+                false,
+            ),
+            Subscriber::Plain(outbox) => outbox.post(value.clone(), false),
         }
     }
-}
-
-impl Ring {
-    fn new(limit: usize) -> Arc<Self> {
-        Arc::new(Ring {
-            inner: Mutex::new(RingInner {
-                items: VecDeque::new(),
-                limit: limit.max(1),
-                producer_done: false,
-                receiver_gone: false,
-            }),
-            notify: Notify::new(),
-        })
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, RingInner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Returns false once the subscriber is gone, so the owner can drop it.
-    fn post(&self, update: MonitorUpdate) -> bool {
-        {
-            let mut g = self.lock();
-            if g.receiver_gone {
-                return false;
-            }
-            if g.items.len() < g.limit {
-                g.items.push_back(update);
-            } else if let Some(tail) = g.items.back_mut() {
-                // Newest value wins; the tail's changed paths were never
-                // delivered, so they become overrun as well as staying
-                // changed.
-                let lost = tail.marked.take().unwrap_or_default();
-                union(&mut tail.overrun, &lost);
-                union(&mut tail.overrun, &update.overrun);
-                let mut marked = lost;
-                union(&mut marked, &update.marked.unwrap_or_default());
-                tail.marked = Some(marked);
-                tail.value = update.value;
-                tail.type_changed |= update.type_changed;
-            }
-        }
-        self.notify.notify_one();
-        true
-    }
-
-    async fn recv(&self) -> Option<MonitorUpdate> {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            {
-                let mut g = self.lock();
-                if let Some(u) = g.items.pop_front() {
-                    return Some(u);
-                }
-                if g.producer_done {
-                    return None;
-                }
-            }
-            notified.await;
-        }
-    }
-
-    fn finish(&self) {
-        self.lock().producer_done = true;
-        self.notify.notify_waiters();
-    }
-
-    fn receiver_gone(&self) {
-        self.lock().receiver_gone = true;
-    }
-}
-
-/// Feed a ring into the server's stream one update at a time; the
-/// `send().await` is the backpressure point.
-fn spawn_pump<T: Send + 'static>(
-    ring: Arc<Ring>,
-    map: fn(MonitorUpdate) -> T,
-) -> mpsc::Receiver<T> {
-    let (tx, rx) = mpsc::channel(1);
-    runtime().spawn(async move {
-        while let Some(u) = ring.recv().await {
-            if tx.send(map(u)).await.is_err() {
-                ring.receiver_gone();
-                break;
-            }
-        }
-    });
-    rx
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +301,7 @@ fn spawn_pump<T: Send + 'static>(
 /// subscriber sees every post either in its seed or in its ring, never
 /// neither.
 struct PvState {
-    subs: Vec<Arc<Ring>>,
+    subs: Vec<Subscriber>,
     /// The union of the open value's marks and every post's since, which
     /// is what p4p's `current()` reports: pvxs keeps the marks on the
     /// stored Value, and its `post` is `current.assign(val)`. The library
@@ -449,35 +364,32 @@ impl PvEntry {
         for bit in marks.iter() {
             state.marks.set(bit);
         }
-        state.subs.retain(|ring| {
-            ring.post(MonitorUpdate {
-                value: merged.clone(),
-                marked: Some(marked.clone()),
-                type_changed: false,
-                overrun: Vec::new(),
-            })
-        });
+        state.subs.retain(|sub| sub.post(&merged, &marked));
         Ok(())
     }
 
     fn close(&self) {
-        let rings = {
+        let subs = {
             let mut state = self.lock_state();
             state.marks = BitSet::new();
             std::mem::take(&mut state.subs)
         };
         self.pv.close();
-        for ring in rings {
-            ring.finish();
-        }
+        // Dropping the last producer endpoint ends each client's stream.
+        drop(subs);
     }
 
-    /// Register a subscriber and snapshot the seed under one lock.
-    fn subscribe(&self, limit: usize) -> Option<(PvField, Arc<Ring>)> {
+    /// Register a subscriber and snapshot the seed under one lock. `wrap`
+    /// turns the producer endpoint into the subscriber the ring serves.
+    fn subscribe<T>(
+        &self,
+        limit: usize,
+        wrap: impl FnOnce(MonitorOutbox<T>, &PvField) -> Subscriber,
+    ) -> Option<(PvField, MonitorRing<T>)> {
         let mut state = self.lock_state();
         let initial = self.pv.current()?;
-        let ring = Ring::new(limit);
-        state.subs.push(ring.clone());
+        let (outbox, ring) = MonitorRing::bounded(limit);
+        state.subs.push(wrap(outbox, &initial));
         Some((initial, ring))
     }
 
@@ -647,9 +559,13 @@ impl ChannelSource for PySource {
     ) -> impl std::future::Future<Output = Option<MonitorStream<PvField>>> + Send {
         let entry = self.entry(name);
         async move {
-            let (initial, ring) = entry?.subscribe(4)?;
-            ring.post(MonitorUpdate::from(initial));
-            Some(MonitorStream::Channel(spawn_pump(ring, |u| u.value)))
+            // A plain stream carries no separate seed: the current value
+            // is its first element.
+            let (_, ring) = entry?.subscribe(4, |outbox, initial| {
+                outbox.post(initial.clone(), false);
+                Subscriber::Plain(outbox)
+            })?;
+            Some(MonitorStream::Ring(ring))
         }
     }
 
@@ -666,10 +582,11 @@ impl ChannelSource for PySource {
         };
         let limit = (opts.queue_size as usize).max(1);
         async move {
-            let (initial, ring) = entry?.subscribe(limit)?;
+            let (initial, ring) =
+                entry?.subscribe(limit, |outbox, _| Subscriber::Marked(outbox))?;
             Some(SubscriptionSeed {
                 initial: Some(SourceRead::from(initial)),
-                updates: MonitorStream::Channel(spawn_pump(ring, |u| u)),
+                updates: MonitorStream::Ring(ring),
                 on_start: None,
             })
         }
