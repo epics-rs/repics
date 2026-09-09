@@ -120,6 +120,42 @@ threads at 800 MHz and every library halves):
 Monitor rows are under a 20 000-put storm from a separate writer process;
 every client received 20 099–20 100 of the 20 100 events on the 100-PV row.
 
+`bench/bench_pva.py` does the same for pvAccess. Client rows run each
+library in its own process against one epicsrs thread `SharedPV` server;
+server rows run each server flavour in its own process, measured by the
+p4p thread client. Same machine, same pinning:
+
+| client | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
+|---|---|---|---|---|
+| get, median / p99 | 54 / 60 us | 67 / 92 us | 95 / 114 us | 98 / 130 us |
+| get 10 000-double array | 103 / 117 us | 104 / 115 us | 121 / 154 us | 123 / 166 us |
+| get list of 100 PVs, one call | 3217 / 5093 us | 4136 / 6561 us | 4172 / 4403 us | 4631 / 5098 us |
+| put wait=True | 186 / 201 us | 222 / 253 us | 154 / 182 us | 167 / 201 us |
+| put wait=False | 5725 /s | 4631 /s | 6423 /s | 6003 /s |
+| monitor, 1 PV, CPU per callback | 32.8 us | 62.0 us | 34.7 us | 41.8 us |
+| monitor, 100 PVs, CPU per callback | 35.0 us | 69.0 us | 52.9 us | 57.4 us |
+
+| server | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
+|---|---|---|---|---|
+| get, median / p99 | 94 / 116 us | 94 / 117 us | 93 / 117 us | 94 / 116 us |
+| put wait=True, through the put handler | 154 / 181 us | 194 / 230 us | 146 / 175 us | 150 / 179 us |
+| post storm, 1 PV: delivered of 20 001, server CPU per post | 19 605, 28.3 us | 19 770, 27.4 us | 8 242, 5.5 us | 8 229, 5.5 us |
+| post storm, 100 PVs: delivered of 20 100, server CPU per post | 19 975, 24.9 us | 19 895, 24.8 us | 19 996, 6.6 us | 11 279, 6.7 us |
+
+pvAccess has no fire-and-forget put: every put is a completed round trip,
+and with the default `get=True` the current value is read first, which
+epicsrs does as a separate get and pvxs inside the put operation; that is
+the difference on the put rows. The client monitor rows are under a storm
+from a separate epicsrs writer running four threads of `put(wait=True)`,
+about 14 000 puts/s, and every client received 19 890 or more of the
+20 001 events, so the CPU column is the comparison. The server storm is
+one thread posting as fast as `post()` returns; the epicsrs server
+delivers nearly every post and spends 25–28 us of CPU per post on it,
+delivery included, where pvxs spends 5.5–6.7 us and, on one PV, squashes
+away more than half of them. Medians of the blocking epicsrs client moved between 44 and 79 us
+on `get` across runs of the same command (thread placement inside the
+four cores); each table is one run.
+
 ## Building
 
 ```sh
