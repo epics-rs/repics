@@ -103,7 +103,6 @@ all of them.
 | `EPICS_PVAS_TLS_OPTIONS`, else `EPICS_PVA_TLS_OPTIONS` | `""` | whitespace-separated `key=value` tokens; the server reads `disable_plaintext=true` or `=false` from it, other tokens are ignored. The first variable present wins, they are not merged |
 | `EPICS_PVAS_MAX_CONNECTIONS` | `1024` | accepted TCP connections |
 | `EPICS_PVAS_MAX_CHANNELS_PER_CONN` | `1024` | channels one connection may open |
-| `EPICS_PVAS_MAX_OPS_PER_CHANNEL` | `64` | operations in flight per channel |
 | `EPICS_PVAS_BEACON_PERIOD` | `15` | seconds between beacons at start; the long period is twelve times it unless `EPICS_PVAS_BEACON_PERIOD_LONG` is set, and never less than the short period plus one second |
 | `EPICS_PVAS_BEACON_PERIOD_LONG` | 12 × short | see above |
 | `EPICS_PVAS_BEACON_ADDR_LIST` | `""` | explicit beacon destinations |
