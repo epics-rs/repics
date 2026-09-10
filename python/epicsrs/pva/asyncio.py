@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 import weakref
 from typing import Any, Callable
 
-from .._epicsrs import PvaContext, PvaError, PvaMonitorHub, Type, Value
+from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, Type, Value
 from .._monitor import LoopDispatcher, per_loop
 from ._common import Wrapping, effective_conf, put_request
 from ._common import log as _log
@@ -135,15 +136,23 @@ class Context:
 
         async def one() -> None:
             req = put_request(request, process, wait)
-            if isinstance(values, Value):
-                V = values
-            else:
-                if get:
-                    V = await self._raw.get_async(name, None, timeout)
+            fetch = get and not isinstance(values, Value)
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                op = await self._raw.put_begin_async(name, req, fetch, timeout)
+                if isinstance(values, Value):
+                    V = values
                 else:
-                    V = Value(await self._raw.info_async(name, timeout))
-                V = self._wrapping.assign(V, values)
-            await self._raw.put_async(name, V, req, timeout)
+                    cur = op.current()
+                    V = self._wrapping.assign(Value(op.type) if cur is None else cur, values)
+                try:
+                    await op.commit_async(V, timeout)
+                except PvaDisconnected:
+                    # The circuit was lost between the two phases: begin again.
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise
+                    continue
+                return
 
         return await self._one(one(), throw)
 

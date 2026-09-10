@@ -47,6 +47,8 @@ def test_client_get_put_rpc(p4p_pvs, p4p_conf, pvname):
                 await C.put(pvname("integer"), 500)
             e = await C.put(pvname("integer"), 500, throw=False)
             assert isinstance(e, PvaRemoteError)
+            await C.put(pvname("integer"), 14, get=False)
+            assert p4p_pvs[1]["integer"].current() == 14
             arg = NTURI([("a", "d"), ("b", "d")]).wrap(pvname("scalar"), kws={"a": 1.5, "b": 2.0})
             assert await C.rpc(pvname("scalar"), arg) == 3.5
             assert (await C.connect(pvname("scalar"))).startswith("127.0.0.1:")

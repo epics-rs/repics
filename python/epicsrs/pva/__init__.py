@@ -15,6 +15,7 @@ the Normative Type helpers, ``epicsrs.pva.server`` the server side.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, PvaRemoteError, PvaTimeout, Type, Value
@@ -151,25 +152,17 @@ class Context:
 
         ``values`` may be a ``Value`` (its marked fields are sent), a dict of
         fields, or a bare value for the ``value`` field. With ``get=True``
-        the current value is read first so NT helpers can see it (an
-        NTEnum label resolves against the live choices).
+        the current value is read on the put's own operation first so NT
+        helpers can see it (an NTEnum label resolves against the live
+        choices); with ``get=False`` the value is built from the type the
+        put operation reports.
         """
         if _is_list(name):
             if not _is_list(values) or len(values) != len(name):
                 raise ValueError(f"{len(name)} PVs need a list of {len(name)} values")
             reqs = request if _is_list(request) else [request] * len(name)
             return self._put_many(list(name), list(values), list(reqs), timeout, throw, process, wait, get)
-
-        def one() -> None:
-            req = put_request(request, process, wait)
-            if isinstance(values, Value):
-                V = values
-            else:
-                V = self._raw.get(name, None, timeout) if get else Value(self._raw.info(name, timeout))
-                V = self._wrapping.assign(V, values)
-            self._raw.put(name, V, req, timeout)
-
-        return self._one(one, throw)
+        return self._put_many([name], [values], [request], timeout, throw, process, wait, get)[0]
 
     def _put_many(
         self,
@@ -182,37 +175,42 @@ class Context:
         wait: bool | None,
         get: bool,
     ) -> list[Any]:
-        """``put`` over lists: the current values are read as one batch, then
-        every write is issued as one batch. An entry that fails at either
-        step is that exception (``throw=False``) or raises (``throw=True``)."""
+        """``put`` over lists: every put is opened as one batch (reading the
+        current values on the puts themselves), the values are built, then
+        every write is committed as one batch. An entry that fails at either
+        step is that exception (``throw=False``) or raises (``throw=True``).
+        Each step waits at most ``timeout``. A put whose circuit is lost
+        between the two steps is begun again if ``timeout`` has not passed
+        since the call started."""
         results: list[Any] = [None] * len(names)
-        pending = list(range(len(names)))
         req_strs = [put_request(r, process, wait) for r in reqs]
-        need = [i for i in pending if not isinstance(values[i], Value)]
-        if need:
-            if get:
-                current = self._raw.get_many([names[i] for i in need], [None] * len(need), timeout)
-            else:
-                current = [
-                    self._one(lambda i=i: Value(self._raw.info(names[i], timeout)), False)
-                    for i in need
-                ]
-            for i, cur in zip(need, current):
-                if isinstance(cur, BaseException):
+        deadline = None if timeout is None else time.monotonic() + timeout
+        pending = list(range(len(names)))
+        while pending:
+            fetch = [get and not isinstance(values[i], Value) for i in pending]
+            ops = self._raw.put_begin_many([names[i] for i in pending], [req_strs[i] for i in pending], fetch, timeout)
+            ready: list[int] = []
+            ready_ops: list[Any] = []
+            ready_values: list[Value] = []
+            for i, op in zip(pending, ops):
+                if isinstance(op, BaseException):
                     if throw:
-                        raise cur
-                    results[i] = cur
-                    pending.remove(i)
-                else:
-                    values[i] = self._wrapping.assign(cur, values[i])
-        if pending:
-            done = self._raw.put_many(
-                [names[i] for i in pending],
-                [values[i] for i in pending],
-                [req_strs[i] for i in pending],
-                timeout,
-            )
-            for i, r in zip(pending, done):
+                        raise op
+                    results[i] = op
+                    continue
+                V = values[i]
+                if not isinstance(V, Value):
+                    cur = op.current()
+                    V = self._wrapping.assign(Value(op.type) if cur is None else cur, V)
+                ready.append(i)
+                ready_ops.append(op)
+                ready_values.append(V)
+            done = self._raw.put_commit_many(ready_ops, ready_values, timeout)
+            pending = []
+            for i, r in zip(ready, done):
+                if isinstance(r, PvaDisconnected) and (deadline is None or time.monotonic() < deadline):
+                    pending.append(i)
+                    continue
                 if isinstance(r, BaseException) and throw:
                     raise r
                 results[i] = r

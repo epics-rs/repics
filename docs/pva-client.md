@@ -74,7 +74,7 @@ aliases `TimeoutError`, `RemoteError` and `Disconnected` for those.
 | `values` | What is sent |
 | --- | --- |
 | a `Value` | its marked fields, as they are |
-| a dict | the current value is read (`get=True`) or built from `info()` (`get=False`), unmarked, then each `field: value` pair is assigned and marked. Dotted keys reach nested fields |
+| a dict | the current value is read on the put operation itself (`get=True`) or built from the type that operation reports (`get=False`), unmarked, then each `field: value` pair is assigned and marked. Dotted keys reach nested fields |
 | anything else | as the dict case, assigned through the NT helper for the structure id; for the default helpers that means the `value` field, and an `NTEnum` accepts a choice label |
 
 `name` may be a list, in which case `values` must be a list of the same

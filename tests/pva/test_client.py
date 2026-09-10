@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from epicsrs import PvaRemoteError, PvaTimeout
+from epicsrs import PvaError, PvaRemoteError, PvaTimeout
 from epicsrs.pva import Context, Disconnected, Value
 from epicsrs.pva.nt import NTScalar, NTURI
 
@@ -164,6 +164,42 @@ def test_put_rejected_by_handler(ctxt):
         ctxt.put(name("scalar"), 1000.0)
     err = ctxt.put(name("scalar"), 1000.0, throw=False)
     assert isinstance(err, PvaRemoteError)
+    assert ctxt.get(name("scalar")) == 1.5
+
+
+def test_put_get_false_builds_from_the_put_type(ctxt, p4p_pvs):
+    # no read: the value is built from the type the put operation reports,
+    # so an unassigned field is the type's default, not the live value
+    _, pvs, _ = p4p_pvs
+    try:
+        ctxt.put(name("scalar"), {"value": 4.5, "alarm": {"severity": 3}}, get=False)
+        cur = pvs["scalar"].current()
+        assert (cur.raw.value, cur.raw.alarm.severity) == (4.5, 3)
+        ctxt.put([name("integer"), name("scalar")], [9, 5.5], get=False)
+        assert (ctxt.get(name("integer")), ctxt.get(name("scalar"))) == (9, 5.5)
+    finally:
+        ctxt.put(name("integer"), 7)
+        ctxt.put(name("scalar"), {"value": 1.5, "alarm": {"severity": 1}})
+
+
+def test_put_op_reads_back_on_the_put_operation(ctxt):
+    # the raw two-phase op: the readback comes with the open op, once
+    (op,) = ctxt._raw.put_begin_many([name("scalar")], [None], [True])
+    assert "alarm" in op.type.keys()
+    cur = op.current()
+    assert cur.value == 1.5
+    assert op.current() is None
+    cur.unmark()
+    cur.value = 2.0
+    assert ctxt._raw.put_commit_many([op], [cur]) == [None]
+    assert ctxt.get(name("scalar")) == 2.0
+    with pytest.raises(PvaError, match="already committed"):
+        ctxt._raw.put_commit_many([op], [cur])
+    (op,) = ctxt._raw.put_begin_many([name("scalar")], [None], [False])
+    assert op.current() is None
+    V = Value(op.type)
+    V.value = 1.5
+    assert ctxt._raw.put_commit_many([op], [V]) == [None]
     assert ctxt.get(name("scalar")) == 1.5
 
 

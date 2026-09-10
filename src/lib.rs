@@ -60,6 +60,7 @@ fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<pva::value::Type>()?;
     m.add_class::<pva::value::Value>()?;
     m.add_class::<pva::client::PvaContext>()?;
+    m.add_class::<pva::client::PutOp>()?;
     m.add_class::<pva::hub::PvaMonitorHub>()?;
     m.add_class::<pva::server::ServerOperation>()?;
     m.add_class::<pva::server::PvaWorkQueue>()?;
