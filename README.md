@@ -127,34 +127,35 @@ p4p thread client. Same machine, same pinning:
 
 | client | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
 |---|---|---|---|---|
-| get, median / p99 | 54 / 60 us | 67 / 92 us | 95 / 114 us | 98 / 130 us |
-| get 10 000-double array | 103 / 117 us | 104 / 115 us | 121 / 154 us | 123 / 166 us |
-| get list of 100 PVs, one call | 3217 / 5093 us | 4136 / 6561 us | 4172 / 4403 us | 4631 / 5098 us |
-| put wait=True | 186 / 201 us | 222 / 253 us | 154 / 182 us | 167 / 201 us |
-| put wait=False | 5725 /s | 4631 /s | 6423 /s | 6003 /s |
-| monitor, 1 PV, CPU per callback | 32.8 us | 62.0 us | 34.7 us | 41.8 us |
-| monitor, 100 PVs, CPU per callback | 35.0 us | 69.0 us | 52.9 us | 57.4 us |
+| get, median / p99 | 47 / 54 us | 69 / 92 us | 99 / 131 us | 99 / 132 us |
+| get 10 000-double array | 90 / 101 us | 105 / 136 us | 122 / 184 us | 122 / 143 us |
+| get list of 100 PVs, one call | 2235 / 3628 us | 4108 / 6173 us | 3980 / 4349 us | 4630 / 5110 us |
+| put wait=True | 145 / 158 us | 194 / 238 us | 150 / 186 us | 156 / 198 us |
+| put wait=False | 7111 /s | 5145 /s | 6506 /s | 6367 /s |
+| monitor, 1 PV, CPU per callback | 30.6 us | 61.7 us | 34.1 us | 41.3 us |
+| monitor, 100 PVs, CPU per callback | 34.6 us | 71.3 us | 54.9 us | 59.3 us |
 
 | server | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
 |---|---|---|---|---|
-| get, median / p99 | 94 / 116 us | 94 / 117 us | 93 / 117 us | 94 / 116 us |
-| put wait=True, through the put handler | 154 / 181 us | 194 / 230 us | 146 / 175 us | 150 / 179 us |
-| post storm, 1 PV: delivered of 20 001, server CPU per post | 19 605, 28.3 us | 19 770, 27.4 us | 8 242, 5.5 us | 8 229, 5.5 us |
-| post storm, 100 PVs: delivered of 20 100, server CPU per post | 19 975, 24.9 us | 19 895, 24.8 us | 19 996, 6.6 us | 11 279, 6.7 us |
+| get, median / p99 | 94 / 115 us | 99 / 128 us | 99 / 133 us | 94 / 116 us |
+| put wait=True, through the put handler | 147 / 170 us | 187 / 239 us | 153 / 189 us | 148 / 177 us |
+| post storm, 1 PV: delivered of 20 001, server CPU per post | 15 842, 13.4 us | 17 161, 13.8 us | 8 673, 5.9 us | 8 318, 5.7 us |
+| post storm, 100 PVs: delivered of 20 100, server CPU per post | 18 390, 12.6 us | 19 571, 12.5 us | 20 100, 6.7 us | 20 098, 6.6 us |
 
 pvAccess has no fire-and-forget put: every put is a completed round trip,
-and with the default `get=True` the current value is read first, which
-epicsrs does as a separate get and pvxs inside the put operation; that is
-the difference on the put rows. The client monitor rows are under a storm
-from a separate epicsrs writer running four threads of `put(wait=True)`,
-about 14 000 puts/s, and every client received 19 890 or more of the
-20 001 events, so the CPU column is the comparison. The server storm is
-one thread posting as fast as `post()` returns; the epicsrs server
-delivers nearly every post and spends 25–28 us of CPU per post on it,
-delivery included, where pvxs spends 5.5–6.7 us and, on one PV, squashes
-away more than half of them. Medians of the blocking epicsrs client moved between 44 and 79 us
-on `get` across runs of the same command (thread placement inside the
-four cores); each table is one run.
+and with the default `get=True` the current value is read first. epicsrs
+and pvxs both do this as one two-phase put operation, the readback riding
+the put's own channel op, so the put rows are on par. The client monitor
+rows are under a storm from a separate epicsrs writer running four threads
+of `put(wait=True)`, about 14 000 puts/s, and every client received
+19 857 or more of the 20 001 events, so the CPU column is the comparison.
+The server storm is one thread posting as fast as `post()` returns; the
+epicsrs server delivers about twice as many posts as pvxs and spends
+about 13 us of CPU per post, delivery included, where pvxs spends about
+6 us and, on one PV, squashes away more than half of them. Medians of the
+blocking epicsrs client moved between 44 and 79 us on `get` across runs
+of the same command (thread placement inside the four cores); each table
+is one run.
 
 Reference documentation: [docs/index.md](docs/index.md).
 
