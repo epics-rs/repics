@@ -470,13 +470,18 @@ impl Value {
     /// `(desc, field, marks)` of the whole root. Refuses a sub-structure
     /// view, since callers use this to put or post the root.
     pub fn snapshot(&self) -> PyResult<(Arc<FieldDesc>, PvField, BitSet)> {
+        self.with_root(|g| (g.desc.clone(), g.field.clone(), g.marks.clone()))
+    }
+
+    /// Run `f` on the whole root under its lock, cloning nothing. Refuses a
+    /// sub-structure view, as [`Self::snapshot`] does.
+    pub fn with_root<R>(&self, f: impl FnOnce(&Root) -> R) -> PyResult<R> {
         if !self.prefix.is_empty() {
             return Err(PyTypeError::new_err(
                 "a sub-structure view cannot be sent; pass the root Value",
             ));
         }
-        let g = self.lock();
-        Ok((g.desc.clone(), g.field.clone(), g.marks.clone()))
+        Ok(f(&self.lock()))
     }
 
     /// Marked leaf paths (structure marks expanded) with their fields.

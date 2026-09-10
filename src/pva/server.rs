@@ -307,6 +307,12 @@ struct PvState {
     /// stored Value, and its `post` is `current.assign(val)`. The library
     /// stores a bare `PvField`, so the marks live here.
     marks: BitSet,
+    /// The descriptor `open` was given, `None` while closed. The library
+    /// stores its own copy and hands it out by clone; this is the `Arc`
+    /// every `Value` built from the same `Type` shares, so a post's type
+    /// check is usually a pointer comparison and `current()` needs no
+    /// descriptor clone.
+    opened: Option<Arc<FieldDesc>>,
 }
 
 /// The Rust side of one Python `SharedPV`.
@@ -322,10 +328,13 @@ impl PvEntry {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn open(&self, desc: FieldDesc, field: PvField, marks: BitSet) -> PyResult<()> {
+    fn open(&self, desc: Arc<FieldDesc>, field: PvField, marks: BitSet) -> PyResult<()> {
         let mut state = self.lock_state();
-        self.pv.open(desc, field).map_err(map_pva)?;
+        self.pv
+            .open(desc.as_ref().clone(), field)
+            .map_err(map_pva)?;
         state.marks = marks;
+        state.opened = Some(desc);
         Ok(())
     }
 
@@ -338,40 +347,49 @@ impl PvEntry {
             .map_err(|_| OpError::failed("SharedPV handler queue is stopped"))
     }
 
-    fn post(&self, desc: Arc<FieldDesc>, field: PvField, marks: BitSet) -> PyResult<()> {
-        let mut state = self.lock_state();
-        let Some(opened) = self.pv.introspection() else {
-            return Err(PvaError::new_err("SharedPV not open"));
-        };
-        if *desc != opened {
-            return Err(PvaError::new_err(
-                "post() value type differs from the open() type; close() first",
-            ));
-        }
-        // p4p: `SharedPV::post` is `current.assign(val)` plus a subscriber
-        // post that pvxs drops when it touches no requested field, so an
-        // unmarked Value changes nothing and reaches no subscriber.
-        if marks.is_empty() {
-            return Ok(());
-        }
-        let prior = self
-            .pv
-            .current()
-            .ok_or_else(|| PvaError::new_err("SharedPV not open"))?;
-        let merged = fill_unmarked_from_prior(&desc, &marks, 0, field, &prior);
-        let marked = changed_bitset_paths(&desc, &marks);
-        self.pv.try_post_checked(merged.clone()).map_err(map_pva)?;
-        for bit in marks.iter() {
-            state.marks.set(bit);
-        }
-        state.subs.retain(|sub| sub.post(&merged, &marked));
-        Ok(())
+    /// pvxs `SharedPV::post`: `current.assign(val)` — the marked leaves
+    /// copied into the stored value in place — then one post per
+    /// subscriber. The value is read under its own lock and never cloned
+    /// as a whole; `post_delta` copies the marked subtrees and checks only
+    /// those. This is the only writer of the stored value (the library's
+    /// PUT handler is unreachable, PUTs go to Python and come back here),
+    /// and it runs under the state lock, so the value `with_current` reads
+    /// for the subscribers is the one this post stored.
+    fn post(&self, value: &Value) -> PyResult<()> {
+        value.with_root(|root| {
+            let mut state = self.lock_state();
+            let Some(opened) = state.opened.clone() else {
+                return Err(PvaError::new_err("SharedPV not open"));
+            };
+            if !Arc::ptr_eq(&root.desc, &opened) && *root.desc != *opened {
+                return Err(PvaError::new_err(
+                    "post() value type differs from the open() type; close() first",
+                ));
+            }
+            // p4p: a subscriber post that touches no requested field is
+            // dropped by pvxs, so an unmarked Value changes nothing and
+            // reaches no subscriber.
+            if root.marks.is_empty() {
+                return Ok(());
+            }
+            self.pv
+                .post_delta(&root.marks, &root.field)
+                .map_err(map_pva)?;
+            state.marks.union_with(&root.marks);
+            if !state.subs.is_empty() {
+                let marked = changed_bitset_paths(&opened, &root.marks);
+                self.pv
+                    .with_current(|_, cur| state.subs.retain(|sub| sub.post(cur, &marked)));
+            }
+            Ok(())
+        })?
     }
 
     fn close(&self) {
         let subs = {
             let mut state = self.lock_state();
             state.marks = BitSet::new();
+            state.opened = None;
             std::mem::take(&mut state.subs)
         };
         self.pv.close();
@@ -731,6 +749,7 @@ impl PvaSharedPV {
             state: Mutex::new(PvState {
                 subs: Vec::new(),
                 marks: BitSet::new(),
+                opened: None,
             }),
             events: queue.tx.clone(),
             token: Arc::new(token),
@@ -753,7 +772,7 @@ impl PvaSharedPV {
     /// Declare the type and initial value; clients may connect afterwards.
     fn open(&self, value: &Value) -> PyResult<()> {
         let (desc, field, marks) = value.snapshot()?;
-        self.entry.open(desc.as_ref().clone(), field, marks)
+        self.entry.open(desc, field, marks)
     }
 
     /// Drop the value and force-disconnect every client.
@@ -769,33 +788,25 @@ impl PvaSharedPV {
     /// Apply the marked fields of `value` and deliver them to every
     /// subscriber. An unmarked Value is a no-op, as in p4p.
     fn post(&self, py: Python<'_>, value: &Value) -> PyResult<()> {
-        let (desc, field, marks) = value.snapshot()?;
         // Store-and-deliver touches no Python object, so run it without
         // the GIL: a thread posting in a loop then hands the interpreter
         // to the handler threads and in-process client callbacks on every
         // post instead of once per switch interval (p4p does the same).
-        py.detach(|| self.entry.post(desc, field, marks))
+        py.detach(|| self.entry.post(value))
     }
 
     /// The current value carrying the open value's marks and every
     /// post's since (p4p `current()`), or `None` while closed.
     fn current(&self) -> Option<Value> {
         let state = self.entry.lock_state();
-        let desc = self.entry.pv.introspection()?;
+        let desc = state.opened.clone()?;
         let field = self.entry.pv.current()?;
-        Some(Value::from_parts(
-            Arc::new(desc),
-            field,
-            state.marks.clone(),
-        ))
+        Some(Value::from_parts(desc, field, state.marks.clone()))
     }
 
     /// The opened type, or `None` while closed.
     fn r#type(&self) -> Option<Type> {
-        self.entry
-            .pv
-            .introspection()
-            .map(|d| Type::from_desc(Arc::new(d)))
+        self.entry.lock_state().opened.clone().map(Type::from_desc)
     }
 }
 
