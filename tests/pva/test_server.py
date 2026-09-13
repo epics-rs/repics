@@ -7,9 +7,11 @@ import time
 
 import numpy as np
 import pytest
-from p4p.client.thread import Context, RemoteError
-from p4p.nt import NTURI
 
+p4p = pytest.importorskip("p4p")
+
+from p4p.client.thread import Context, RemoteError  # noqa: E402
+from p4p.nt import NTURI  # noqa: E402
 from repics.pva import Value
 from repics.pva.nt import NTEnum, NTNDArray, NTScalar, NTTable
 from repics.pva.server import Handler, Server, SharedPV, StaticProvider

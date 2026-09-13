@@ -7,10 +7,12 @@ import time
 
 import numpy as np
 import pytest
-from p4p.client.thread import Context as P4PContext
-from p4p.client.thread import RemoteError as P4PRemoteError
-from p4p.nt import NTURI as P4PNTURI
 
+p4p = pytest.importorskip("p4p")
+
+from p4p.client.thread import Context as P4PContext  # noqa: E402
+from p4p.client.thread import RemoteError as P4PRemoteError  # noqa: E402
+from p4p.nt import NTURI as P4PNTURI  # noqa: E402
 from repics.pva import Disconnected, PvaError, PvaRemoteError, PvaTimeout, Value
 from repics.pva.asyncio import Context
 from repics.pva.nt import NTScalar, NTURI
