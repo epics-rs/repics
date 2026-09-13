@@ -30,6 +30,16 @@ def test_type_and_value_basics():
         V.nope
 
 
+def test_type_aspy_round_trips():
+    T = Type([("value", "d"), ("a", ("S", None, [("b", "i"), ("c", "as")]))], id="x:y")
+    T2 = Type(T.aspy())
+    assert T2 == T and T2.getID() == "x:y"
+    # An explicit id overrides the one carried in the spec.
+    assert Type(T.aspy(), id="new:id").getID() == "new:id"
+    # A three-member list must not be mistaken for a (code, id, members) tuple.
+    assert Type([("a", "i"), ("b", "i"), ("c", "i")]).keys() == ["a", "b", "c"]
+
+
 def test_ntscalar_wrap_unwrap_metadata():
     nt = NTScalar("d", display=True, control=True, valueAlarm=True)
     V = nt.wrap(2.5, timestamp=1700000000.25, severity=1, message="HIGH")

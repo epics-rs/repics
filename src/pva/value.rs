@@ -182,6 +182,19 @@ fn members_to_py(
     (code, id, PyList::new(py, items)?).into_py_any(py)
 }
 
+/// Whether `spec` is a `(code, id, members)` compound spec rather than a
+/// member list. Distinguished from a 3-member list by the leading string
+/// type code (`"S"`, `"aS"`, `"U"`, `"aU"`); a member entry is a `(name,
+/// spec)` pair, never a bare string in first position.
+fn is_compound_spec(spec: &Bound<'_, PyAny>) -> bool {
+    let Ok(t) = spec.cast::<PyTuple>() else {
+        return false;
+    };
+    t.len() == 3
+        && t.get_item(0)
+            .is_ok_and(|item| item.cast::<PyString>().is_ok())
+}
+
 /// Parse one p4p type spec: a code string, a `(code, id, members)` tuple,
 /// or a `Type`.
 fn desc_from_py(spec: &Bound<'_, PyAny>) -> PyResult<FieldDesc> {
@@ -297,11 +310,13 @@ impl Type {
 
 #[pymethods]
 impl Type {
-    /// `Type(spec, id=None)`: `spec` is a list of `(name, code)` members.
+    /// `Type(spec, id=None)`: `spec` is a list of `(name, code)` members,
+    /// or a `(code, id, members)` tuple as returned by [`Type::aspy`] (so
+    /// `Type(t.aspy())` round-trips), or another `Type`.
     #[new]
     #[pyo3(signature = (spec, id=None))]
     fn new(spec: &Bound<'_, PyAny>, id: Option<String>) -> PyResult<Self> {
-        let desc = if spec.cast::<Type>().is_ok() {
+        let desc = if spec.cast::<Type>().is_ok() || is_compound_spec(spec) {
             desc_from_py(spec)?
         } else {
             FieldDesc::Structure {
