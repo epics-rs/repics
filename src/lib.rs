@@ -1,4 +1,4 @@
-//! `epicsrs._epicsrs` — the Rust half of epicsrs.
+//! `repics._repics` — the Rust half of repics.
 //!
 //! This module is deliberately thin: it owns the one tokio runtime, wraps
 //! the epics-rs client handles as Python classes, and converts values at the
@@ -29,7 +29,7 @@ fn _wait_idle(py: Python<'_>, timeout: f64) -> bool {
 }
 
 #[pymodule]
-fn _epicsrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _repics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     runtime::configure();
     runtime::init_logging();

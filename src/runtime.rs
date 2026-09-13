@@ -31,9 +31,9 @@ use crate::error::timeout_err;
 /// up as CPU per monitor update (measured: 33 us per callback with one
 /// worker against 40-50 with four, on 100 monitored PVs). Value
 /// conversion and user callbacks run on Python's threads regardless.
-/// `EPICSRS_WORKERS` overrides the count.
+/// `REPICS_WORKERS` overrides the count.
 pub fn configure() {
-    let workers = std::env::var_os("EPICSRS_WORKERS")
+    let workers = std::env::var_os("REPICS_WORKERS")
         .and_then(|v| v.into_string().ok())
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(1)
@@ -42,15 +42,15 @@ pub fn configure() {
     builder
         .enable_all()
         .worker_threads(workers)
-        .thread_name("epicsrs-rt");
+        .thread_name("repics-rt");
     pyo3_async_runtimes::tokio::init(builder);
 }
 
-/// Send the libraries' `tracing` output to stderr when `EPICSRS_LOG` is
+/// Send the libraries' `tracing` output to stderr when `REPICS_LOG` is
 /// set; its value is an env-filter directive list (`epics_pva_rs=debug`),
 /// as `PVXS_LOG` is for pvxs. Unset, nothing is logged.
 pub fn init_logging() {
-    if let Ok(spec) = std::env::var("EPICSRS_LOG") {
+    if let Ok(spec) = std::env::var("REPICS_LOG") {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(spec)
             .with_writer(std::io::stderr)

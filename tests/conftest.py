@@ -5,7 +5,7 @@ The client reads `EPICS_CA_*` when the default context is first built, so
 test imports the front ends: `ioc` serves `tests/ioc/test.db` for the whole
 session on the first, `ioc2` serves `tests/ioc/aioca.db` per test on the
 second so a test can kill and restart it. The IOC binary comes from
-`EPICSRS_SOFTIOC` or `softioc-rs` on `PATH`.
+`REPICS_SOFTIOC` or `softioc-rs` on `PATH`.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).parent
-PREFIX = f"epicsrs-{os.getpid()}:"
+PREFIX = f"repics-{os.getpid()}:"
 PREFIX2 = f"aioca-{os.getpid()}:"
 
 
@@ -75,9 +75,9 @@ def _stop(proc: subprocess.Popen) -> None:
 
 @pytest.fixture(scope="session")
 def ca_env() -> tuple[str, int, int]:
-    binary = os.environ.get("EPICSRS_SOFTIOC") or shutil.which("softioc-rs")
+    binary = os.environ.get("REPICS_SOFTIOC") or shutil.which("softioc-rs")
     if not binary:
-        pytest.skip("no softioc-rs: set EPICSRS_SOFTIOC or put softioc-rs on PATH")
+        pytest.skip("no softioc-rs: set REPICS_SOFTIOC or put softioc-rs on PATH")
     port, port2 = _free_port(), _free_port()
     os.environ["EPICS_CA_ADDR_LIST"] = f"127.0.0.1:{port} 127.0.0.1:{port2}"
     os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"

@@ -1,5 +1,5 @@
 """aioca's test suite (DiamondLightSource/aioca, tests/test_aioca.py) run
-against ``epicsrs.aio``, as a functional check of the asyncio front end.
+against ``repics.aio``, as a functional check of the asyncio front end.
 
 Names follow this package (``form=`` for ``format=``, ``CaNothing``,
 ``CaTimeout``), the IOC is ``softioc-rs`` on ``tests/ioc/aioca.db`` and is
@@ -26,9 +26,9 @@ from pathlib import Path
 
 import pytest
 
-import epicsrs
-from epicsrs import aio
-from epicsrs.aio import (
+import repics
+from repics import aio
+from repics.aio import (
     CAInfo,
     CaNothing,
     caget,
@@ -97,8 +97,8 @@ async def test_connect(pv) -> None:
 @async_test
 async def test_cainfo(ioc2, pv) -> None:
     conn2 = await cainfo([pv.WAVEFORM, pv.SI], timeout=TIMEOUT)
-    assert conn2[0].datatype == epicsrs.DBR_SHORT
-    assert conn2[1].datatype == epicsrs.DBR_STRING
+    assert conn2[0].datatype == repics.DBR_SHORT
+    assert conn2[1].datatype == repics.DBR_STRING
     conn = await cainfo(pv.LONGOUT)
     assert type(conn) is CAInfo
     assert conn.ok is True
@@ -113,9 +113,9 @@ async def test_cainfo(ioc2, pv) -> None:
     for _ in range(50):
         await asyncio.sleep(0.1)
         conn = await cainfo(pv.LONGOUT, wait=False)
-        if conn.datatype == epicsrs.DBR_NO_ACCESS:
+        if conn.datatype == repics.DBR_NO_ACCESS:
             break
-    assert conn.datatype == epicsrs.DBR_NO_ACCESS
+    assert conn.datatype == repics.DBR_NO_ACCESS
     assert (
         str(conn)
         == f"""{pv.LONGOUT}:
@@ -136,10 +136,10 @@ async def test_get_non_existent_pvs_no_throw(ioc2, pv) -> None:
     await asyncio.sleep(0.5)
     values = await caget([pv.WAVEFORM, pv.NE], throw=False, timeout=0.1)
     assert [False, False] == [v.ok for v in values]
-    assert [epicsrs.ECA_TIMEOUT, epicsrs.ECA_TIMEOUT] == [v.errorcode for v in values]
-    with pytest.raises(epicsrs.CaTimeout):
+    assert [repics.ECA_TIMEOUT, repics.ECA_TIMEOUT] == [v.errorcode for v in values]
+    with pytest.raises(repics.CaTimeout):
         await caget(pv.NE, timeout=0.1)
-    with pytest.raises(epicsrs.CaTimeout):
+    with pytest.raises(repics.CaTimeout):
         await caget(pv.WAVEFORM, timeout=0.1)
 
 
@@ -161,7 +161,7 @@ async def test_get_pv_with_bad_egus(pv) -> None:
 async def test_get_waveform_pv(pv) -> None:
     value = await caget(pv.WAVEFORM, timeout=TIMEOUT)
     assert len(value) == 0
-    assert isinstance(value, epicsrs.AugmentedArray)
+    assert isinstance(value, repics.AugmentedArray)
     await caput(pv.WAVEFORM, [1, 2, 3, 4])
     assert pytest.approx([1, 2, 3, 4]) == await caget(pv.WAVEFORM)
     assert pytest.approx([1, 2, 3, 4, 0]) == await caget(pv.WAVEFORM, count=6)
@@ -179,7 +179,7 @@ async def test_caput(pv) -> None:
 
 @async_test
 async def test_caput_on_ro_pv_fails(pv) -> None:
-    with pytest.raises(epicsrs.CaError):
+    with pytest.raises(repics.CaError):
         await caput(pv.RO, 43, timeout=TIMEOUT)
     result = await caput(pv.RO, 43, throw=False)
     assert not result.ok
@@ -207,8 +207,8 @@ async def test_caput_two_pvs_different_value(pv) -> None:
 
 @async_test
 async def test_caget_non_existent(ca_env) -> None:
-    name = "epicsrs-nowhere:ne"
-    with pytest.raises(epicsrs.CaTimeout):
+    name = "repics-nowhere:ne"
+    with pytest.raises(repics.CaTimeout):
         await caget(name, timeout=0.1)
     v = await caget(name, timeout=0.1, throw=False)
     assert f"CaNothing('{name}', 80)" == repr(v)
@@ -224,11 +224,11 @@ async def test_caget_non_existent_and_good(pv) -> None:
     await caput(pv.WAVEFORM, [1, 2, 3, 4], timeout=TIMEOUT)
     try:
         await caget([pv.NE, pv.WAVEFORM], timeout=1.0)
-    except epicsrs.CaTimeout:
+    except repics.CaTimeout:
         pass
     await asyncio.sleep(0.5)
     gc.collect()
-    x = [x for x in gc.get_objects() if isinstance(x, epicsrs.AugmentedArray)]
+    x = [x for x in gc.get_objects() if isinstance(x, repics.AugmentedArray)]
     assert len(x) == 0
 
 
@@ -254,7 +254,7 @@ async def test_monitor(ioc2, pv) -> None:
 
     assert [42, 43, 44] == values[:3]
     assert [True, True, True, False] == [v.ok for v in values]
-    assert values[3].errorcode == epicsrs.ECA_DISCONN
+    assert values[3].errorcode == repics.ECA_DISCONN
 
 
 @async_test
@@ -492,7 +492,7 @@ def test_ca_nothing_dunder_methods() -> None:
     with pytest.raises(TypeError):
         for _x in good:  # type: ignore
             pass
-    bad = CaNothing("not all ok", epicsrs.ECA_DISCONN)
+    bad = CaNothing("not all ok", repics.ECA_DISCONN)
     assert not bad
     with pytest.raises(TypeError):
         for _x in bad:  # type: ignore
@@ -577,4 +577,4 @@ async def test_reconnect_after_ioc_restart(ioc2, pv) -> None:
 
 def test_aio_module_exports() -> None:
     assert aio.DEFAULT_TIMEOUT == 5.0
-    assert aio.ECA_DISCONN == epicsrs.ECA_DISCONN
+    assert aio.ECA_DISCONN == repics.ECA_DISCONN

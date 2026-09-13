@@ -688,22 +688,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epicsrs"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "epics-base-rs",
- "epics-ca-rs",
- "epics-pva-rs",
- "numpy",
- "pyo3",
- "pyo3-async-runtimes",
- "tokio",
- "tokio-util",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1488,6 +1472,22 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repics"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "epics-base-rs",
+ "epics-ca-rs",
+ "epics-pva-rs",
+ "numpy",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "tokio",
+ "tokio-util",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "ring"

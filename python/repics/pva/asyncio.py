@@ -14,7 +14,7 @@ import time
 import weakref
 from typing import Any, Callable
 
-from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, Type, Value
+from .._repics import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, Type, Value
 from .._monitor import LoopDispatcher, per_loop
 from ._common import Wrapping, effective_conf, put_request
 from ._common import log as _log
@@ -31,7 +31,7 @@ _dispatchers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, LoopDispatch
 
 
 def _dispatcher() -> LoopDispatcher:
-    return per_loop(_dispatchers, lambda loop: LoopDispatcher(PvaMonitorHub(), loop, "epicsrs pvmonitor"))
+    return per_loop(_dispatchers, lambda loop: LoopDispatcher(PvaMonitorHub(), loop, "repics pvmonitor"))
 
 
 class Subscription(SubscriptionBase):

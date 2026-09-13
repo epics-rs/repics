@@ -80,7 +80,7 @@ enum OpKind {
 type OpReply = Result<Option<(FieldDesc, PvField)>, String>;
 
 /// A client PUT or RPC waiting for the Python handler (p4p `ServerOperation`).
-#[pyclass(name = "ServerOperation", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "ServerOperation", module = "repics._repics", frozen)]
 pub struct ServerOperation {
     kind: OpKind,
     name: String,
@@ -187,7 +187,7 @@ struct Event {
 }
 
 /// The channel a Python drain loop pulls server events from.
-#[pyclass(name = "PvaWorkQueue", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "PvaWorkQueue", module = "repics._repics", frozen)]
 pub struct PvaWorkQueue {
     tx: mpsc::UnboundedSender<Event>,
     /// Behind an `Arc` so `recv_async` can move it into a `'static` future.
@@ -727,8 +727,8 @@ impl ChannelSource for PySource {
 // PvaSharedPV
 // ---------------------------------------------------------------------------
 
-/// The Rust half of `epicsrs.pva.server.SharedPV`.
-#[pyclass(name = "PvaSharedPV", module = "epicsrs._epicsrs", frozen)]
+/// The Rust half of `repics.pva.server.SharedPV`.
+#[pyclass(name = "PvaSharedPV", module = "repics._repics", frozen)]
 pub struct PvaSharedPV {
     entry: Arc<PvEntry>,
 }
@@ -815,7 +815,7 @@ impl PvaSharedPV {
 // ---------------------------------------------------------------------------
 
 /// A named table of PVs (p4p `StaticProvider`).
-#[pyclass(name = "PvaProvider", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "PvaProvider", module = "repics._repics", frozen)]
 pub struct PvaProvider {
     name: String,
     source: Arc<PySource>,
@@ -954,7 +954,7 @@ fn configure(mut c: PvaServerConfig, conf: &HashMap<String, String>) -> PyResult
 }
 
 /// A running pvAccess server over one or more providers.
-#[pyclass(name = "PvaServer", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "PvaServer", module = "repics._repics", frozen)]
 pub struct PvaServer {
     inner: Mutex<Option<RsServer>>,
     tcp: SocketAddr,

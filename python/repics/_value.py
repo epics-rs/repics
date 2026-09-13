@@ -34,7 +34,7 @@ from ._dbr import (
     ca_message,
     errorcode,
 )
-from ._epicsrs import CaError, ChannelInfo, Snapshot
+from ._repics import CaError, ChannelInfo, Snapshot
 
 _META = (
     "name",

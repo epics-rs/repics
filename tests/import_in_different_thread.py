@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 
-from epicsrs.aio import caget
+from repics.aio import caget
 
 if __name__ == "__main__":
 

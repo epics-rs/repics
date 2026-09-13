@@ -1,14 +1,14 @@
-# epicsrs.aio
+# repics.aio
 
-The `epicsrs.ca` functions as coroutines for asyncio. Signatures, arguments,
+The `repics.ca` functions as coroutines for asyncio. Signatures, arguments,
 return values, errors and constants are the same as in [ca.md](ca.md); only
 the differences are listed here.
 
 ```python
-from epicsrs.aio import caget, caput, camonitor, cainfo, connect
+from repics.aio import caget, caput, camonitor, cainfo, connect
 ```
 
-| Name | Difference from `epicsrs.ca` |
+| Name | Difference from `repics.ca` |
 | --- | --- |
 | `await connect(pv, wait=True, timeout=5.0, throw=True)` | coroutine |
 | `await caget(pv, form='time', datatype=None, count=0, timeout=5.0, throw=True)` | coroutine |
@@ -26,14 +26,14 @@ counts the rest. Callbacks run as a task on the loop that called
 `Subscription` has the same `close()`, `pause()`, `resume()`,
 `dropped_callbacks`, context manager and `repr()` as the blocking flavour.
 
-The same shared `CaContext` and channel cache serve `epicsrs.ca`,
-`epicsrs.aio` and `epicsrs.pv`, so mixing them in one process is fine.
+The same shared `CaContext` and channel cache serve `repics.ca`,
+`repics.aio` and `repics.pv`, so mixing them in one process is fine.
 
 ## Example
 
 ```python
 import asyncio
-from epicsrs.aio import caget, caput, camonitor, cainfo, connect, CaNothing
+from repics.aio import caget, caput, camonitor, cainfo, connect, CaNothing
 
 async def main():
     v = await caget("demo:ai")

@@ -15,7 +15,7 @@ import numpy
 
 from . import _context
 from ._dbr import DBR_CHAR_BYTES, DBR_CHAR_STR, DBR_CHAR_UNICODE, DBR_ENUM_STR
-from ._epicsrs import CaChannel, Snapshot
+from ._repics import CaChannel, Snapshot
 from ._value import CAInfo, CaNothing, augment
 
 DEFAULT_TIMEOUT = 5.0

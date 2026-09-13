@@ -1,4 +1,4 @@
-"""Type stubs for the `epicsrs._epicsrs` extension.
+"""Type stubs for the `repics._repics` extension.
 
 Hand-written from the pyo3 surface in `src/`; `tests/test_stubs.py`
 checks every name, member and parameter list against the built module.

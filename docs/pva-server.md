@@ -1,15 +1,15 @@
 # PVA server
 
-`epicsrs.pva.server` serves PVs over pvAccess. A `SharedPV` holds one
+`repics.pva.server` serves PVs over pvAccess. A `SharedPV` holds one
 value and its handlers; a `StaticProvider` maps names to PVs; a `Server`
-listens. Handlers run on a worker thread (`epicsrs.pva.server.SharedPV`)
-or on an asyncio loop (`epicsrs.pva.server.asyncio.SharedPV`). The
+listens. Handlers run on a worker thread (`repics.pva.server.SharedPV`)
+or on an asyncio loop (`repics.pva.server.asyncio.SharedPV`). The
 network side is the `epics-pva-rs` crate; Python sees only put and rpc
 requests and the connect edges.
 
 ```python
-from epicsrs.pva.server import Server, StaticProvider, SharedPV, WorkQueue, Handler, ServerOperation
-from epicsrs.pva.server.asyncio import SharedPV       # loop flavour; also re-exports Server, StaticProvider, Handler, ServerOperation
+from repics.pva.server import Server, StaticProvider, SharedPV, WorkQueue, Handler, ServerOperation
+from repics.pva.server.asyncio import SharedPV       # loop flavour; also re-exports Server, StaticProvider, Handler, ServerOperation
 ```
 
 ## Server
@@ -54,8 +54,8 @@ receiving posts until the PV is closed.
 ## SharedPV
 
 ```python
-class SharedPV(handler=None, initial=None, nt=None, wrap=None, unwrap=None, queue=None)              # epicsrs.pva.server
-class SharedPV(handler=None, initial=None, nt=None, wrap=None, unwrap=None)                          # epicsrs.pva.server.asyncio
+class SharedPV(handler=None, initial=None, nt=None, wrap=None, unwrap=None, queue=None)              # repics.pva.server
+class SharedPV(handler=None, initial=None, nt=None, wrap=None, unwrap=None)                          # repics.pva.server.asyncio
 ```
 
 | Argument | Meaning |
@@ -67,7 +67,7 @@ class SharedPV(handler=None, initial=None, nt=None, wrap=None, unwrap=None)     
 | `queue` | thread flavour only: the `WorkQueue` the handlers run on. By default one of four shared queues, handed out round-robin and created on first use |
 
 The asyncio flavour must be constructed inside a running loop; it binds to
-that loop and starts a drain task named `epicsrs.pva.server` on it.
+that loop and starts a drain task named `repics.pva.server` on it.
 
 | Method | Meaning |
 | --- | --- |
@@ -101,7 +101,7 @@ it unless called from that thread. Every PV created with the same
 A put or rpc without a handler is answered with the error `Put not supported`
 or `RPC not supported`. A handler must call `op.done()` or `op.done(error=...)`;
 an exception escaping the handler is logged through
-`logging.getLogger("epicsrs.pva.server")` (except `RemoteError`) and answered
+`logging.getLogger("repics.pva.server")` (except `RemoteError`) and answered
 as `op.done(error=str(exc))`. In the asyncio flavour a handler may be a
 coroutine function; it runs as a task, and a cancelled task answers
 `handler cancelled`. A request that arrives for a PV that has been
@@ -138,8 +138,8 @@ configuration and the configuration keys a client reads:
 
 ```python
 import re
-from epicsrs.pva.server import Server, StaticProvider
-from epicsrs.pva._common import effective_conf
+from repics.pva.server import Server, StaticProvider
+from repics.pva._common import effective_conf
 with Server([StaticProvider("p")], isolate=True) as S:
     print({k: re.sub(r"\d{4,5}", "<port>", v) for k, v in S.conf().items()})
 print(effective_conf(None, useenv=False))

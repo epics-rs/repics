@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from epicsrs.pva import Type, Value
-from epicsrs.pva.nt import NTEnum, NTNDArray, NTScalar, NTTable, NTURI
+from repics.pva import Type, Value
+from repics.pva.nt import NTEnum, NTNDArray, NTScalar, NTTable, NTURI
 
 
 def test_type_and_value_basics():

@@ -290,7 +290,7 @@ fn members_from_py(spec: &Bound<'_, PyAny>) -> PyResult<Vec<(String, FieldDesc)>
 // ---------------------------------------------------------------------------
 
 /// A pvData type description (p4p `Type`).
-#[pyclass(name = "Type", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "Type", module = "repics._repics", frozen)]
 pub struct Type {
     pub desc: Arc<FieldDesc>,
 }
@@ -451,7 +451,7 @@ impl Root {
 }
 
 /// A pvData structure value (p4p `Value`).
-#[pyclass(name = "Value", module = "epicsrs._epicsrs", frozen)]
+#[pyclass(name = "Value", module = "repics._repics", frozen)]
 pub struct Value {
     root: Arc<Mutex<Root>>,
     prefix: String,
@@ -960,7 +960,7 @@ fn arc_to_numpy<T: Element + Copy + Send + Sync + 'static>(
     data: &Arc<[T]>,
 ) -> PyResult<Py<PyAny>> {
     let keep = data.clone();
-    let capsule = PyCapsule::new(py, keep, Some(CString::new("epicsrs.pva.array").unwrap()))?;
+    let capsule = PyCapsule::new(py, keep, Some(CString::new("repics.pva.array").unwrap()))?;
     let view = ArrayView1::from(&data[..]);
     // SAFETY: the capsule owns a clone of the Arc, so the buffer outlives
     // the numpy array; an `Arc<[T]>` is never reallocated.

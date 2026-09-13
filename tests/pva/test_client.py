@@ -1,4 +1,4 @@
-"""epicsrs.pva.Context against a p4p server."""
+"""repics.pva.Context against a p4p server."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import time
 import numpy as np
 import pytest
 
-from epicsrs import PvaError, PvaRemoteError, PvaTimeout
-from epicsrs.pva import Context, Disconnected, Value
-from epicsrs.pva.nt import NTScalar, NTURI
+from repics import PvaError, PvaRemoteError, PvaTimeout
+from repics.pva import Context, Disconnected, Value
+from repics.pva.nt import NTScalar, NTURI
 
 IMAGE_SHAPE = (1000, 1000)
 

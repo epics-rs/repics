@@ -127,7 +127,7 @@ fn configure(
 // ---------------------------------------------------------------------------
 
 /// A pvAccess client context.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct PvaContext {
     client: Arc<PvaClient>,
 }
@@ -476,7 +476,7 @@ impl PvaContext {
 /// The circuit may be lost between the phases; `commit` then raises
 /// `PvaDisconnected` and the caller begins again (pvxs's non-autoExec
 /// rule, `clientget.cpp:380-404`).
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct PutOp {
     ty: Arc<FieldDesc>,
     present: Mutex<Option<(PvField, BitSet)>>,

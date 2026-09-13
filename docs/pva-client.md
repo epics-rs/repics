@@ -1,12 +1,12 @@
 # PVA client
 
-`epicsrs.pva.Context` is the blocking pvAccess client; `epicsrs.pva.asyncio.Context`
+`repics.pva.Context` is the blocking pvAccess client; `repics.pva.asyncio.Context`
 is the same API as coroutines. Values are described in [values.md](values.md)
 and the normative-type helpers that unwrap them in [nt.md](nt.md).
 
 ```python
-from epicsrs.pva import Context            # blocking
-from epicsrs.pva.asyncio import Context    # coroutines
+from repics.pva import Context            # blocking
+from repics.pva.asyncio import Context    # coroutines
 ```
 
 ## Context
@@ -64,7 +64,7 @@ forms run through `asyncio.gather`.
 
 A name that never resolves raises `PvaTimeout` when the deadline passes.
 A server-side failure raises `PvaRemoteError`. A channel lost while an
-operation is pending raises `PvaDisconnected`. `epicsrs.pva` exports the
+operation is pending raises `PvaDisconnected`. `repics.pva` exports the
 aliases `TimeoutError`, `RemoteError` and `Disconnected` for those.
 
 ### put
@@ -101,7 +101,7 @@ returns a `Subscription` at once, before the channel connects.
 
 | Argument | Meaning |
 | --- | --- |
-| `cb` | `cb(value)` for every update. In the blocking flavour it runs on one daemon thread (`epicsrs pvmonitor`) shared by every monitor of that flavour, unless `queue` is given. In the asyncio flavour it runs as a task on the loop that called `monitor`, and may be a coroutine function; a coroutine callback is awaited before the next item is taken |
+| `cb` | `cb(value)` for every update. In the blocking flavour it runs on one daemon thread (`repics pvmonitor`) shared by every monitor of that flavour, unless `queue` is given. In the asyncio flavour it runs as a task on the loop that called `monitor`, and may be a coroutine function; a coroutine callback is awaited before the next item is taken |
 | `request` | pvRequest string; `record[queueSize=N]` sets the queue bound when `limit` is `None` |
 | `notify_disconnect` | with `True`, `cb` also receives a `Disconnected()` instance before the first connection and after every loss, and a `Finished()` instance when the server ends the subscription. With `False` those events are silent |
 | `queue` | blocking flavour only: an object with a `push` or `put` method; `functools.partial(cb, value)` is pushed instead of calling `cb` |
@@ -121,7 +121,7 @@ The `Subscription`:
 | context manager | `__exit__` closes |
 | `repr()` | `Subscription('name', open)` or `closed` |
 
-An exception raised by `cb` is logged through `logging.getLogger("epicsrs.pva")`
+An exception raised by `cb` is logged through `logging.getLogger("repics.pva")`
 and the monitor continues.
 
 ## Example
@@ -130,9 +130,9 @@ The server side of this example is explained in [pva-server.md](pva-server.md).
 
 ```python
 import time
-from epicsrs.pva import Context, Value, Type, RemoteError
-from epicsrs.pva.nt import NTScalar, NTURI
-from epicsrs.pva.server import Server, StaticProvider, SharedPV
+from repics.pva import Context, Value, Type, RemoteError
+from repics.pva.nt import NTScalar, NTURI
+from repics.pva.server import Server, StaticProvider, SharedPV
 
 x = SharedPV(nt=NTScalar("d"), initial=1.0)
 @x.put
@@ -223,9 +223,9 @@ is `0.0` because the `timeStamp` field was not requested.
 
 ```python
 import time
-from epicsrs.pva import Context, Disconnected, Finished
-from epicsrs.pva.nt import NTScalar
-from epicsrs.pva.server import Server, StaticProvider, SharedPV
+from repics.pva import Context, Disconnected, Finished
+from repics.pva.nt import NTScalar
+from repics.pva.server import Server, StaticProvider, SharedPV
 
 pv = SharedPV(nt=NTScalar("d"), initial=0.0)
 prov = StaticProvider("demo"); prov.add("demo:pva:m", pv)
@@ -269,9 +269,9 @@ subscription time.
 ### put options
 
 ```python
-from epicsrs.pva import Context
-from epicsrs.pva.nt import NTScalar
-from epicsrs.pva.server import Server, StaticProvider, SharedPV
+from repics.pva import Context
+from repics.pva.nt import NTScalar
+from repics.pva.server import Server, StaticProvider, SharedPV
 
 pv = SharedPV(nt=NTScalar("d", display=True), initial=0.0)
 @pv.put
@@ -319,18 +319,18 @@ In 1 of 5 runs of this script the `get` that
 loss shows up in a minimal script that serves one PV and reads it twice
 from a `Context` in the same process: with the default runtime of one
 worker thread the second `get` timed out in 8 of 40 runs (2 s deadline),
-and in 0 of 40 runs with `EPICSRS_WORKERS=4` (see [config.md](config.md)).
-A retry on the same context succeeds. Set `EPICSRS_WORKERS` above 1 when a
+and in 0 of 40 runs with `REPICS_WORKERS=4` (see [config.md](config.md)).
+A retry on the same context succeeds. Set `REPICS_WORKERS` above 1 when a
 process runs both a `Server` and a `Context`.
 
 ## asyncio flavour
 
 ```python
 import asyncio
-from epicsrs.pva.asyncio import Context
-from epicsrs.pva.server import Server, StaticProvider
-from epicsrs.pva.server.asyncio import SharedPV
-from epicsrs.pva.nt import NTScalar
+from repics.pva.asyncio import Context
+from repics.pva.server import Server, StaticProvider
+from repics.pva.server.asyncio import SharedPV
+from repics.pva.nt import NTScalar
 
 async def main():
     pv = SharedPV(nt=NTScalar("d"), initial=0.0)   # must be created inside a running loop

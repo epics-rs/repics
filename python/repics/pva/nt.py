@@ -6,7 +6,7 @@ returning a ``Value``, ``unwrap(Value)`` returning a plain Python value, and
 ``assign(Value, python_value)`` used by ``Context.put``.
 
 ``unwrap`` yields the same augmented values as the Channel Access front
-ends (``epicsrs.AugmentedFloat`` and friends): ``.severity``, ``.status``,
+ends (``repics.AugmentedFloat`` and friends): ``.severity``, ``.status``,
 ``.timestamp``, ``.raw_stamp`` and, where the structure carries them, the
 display/control limits. Every unwrapped value also carries ``.raw``, the
 ``Value`` it came from. Arrays are views on the wire buffer, not copies.
@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy
 
-from .._epicsrs import Type, Value
+from .._repics import Type, Value
 from .._value import _META, Augmented, AugmentedInt, AugmentedList, augment
 
 __all__ = [

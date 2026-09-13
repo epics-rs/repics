@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy
 
-from ._epicsrs import CaError, ca_message
+from ._repics import CaError, ca_message
 
 __all__ = [
     "FORMS",

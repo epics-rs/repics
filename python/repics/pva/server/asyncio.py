@@ -14,18 +14,18 @@ import logging
 import weakref
 from typing import Any, Callable
 
-from ..._epicsrs import PvaWorkQueue
+from ..._repics import PvaWorkQueue
 from ._base import Handler, Server, ServerOperation, SharedPVBase, StaticProvider, deliver, fail_op
 
 __all__ = ["SharedPV", "Handler", "ServerOperation", "StaticProvider", "Server"]
 
-log = logging.getLogger("epicsrs.pva.server")
+log = logging.getLogger("repics.pva.server")
 
 
 class _TaskQueue:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._raw = PvaWorkQueue()
-        self._task = loop.create_task(self._drain(), name="epicsrs.pva.server")
+        self._task = loop.create_task(self._drain(), name="repics.pva.server")
 
     async def _drain(self) -> None:
         while deliver(await self._raw.recv_async()):

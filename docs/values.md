@@ -1,12 +1,12 @@
 # Type and Value
 
-`epicsrs.pva.Type` describes a pvData structure; `epicsrs.pva.Value` holds
+`repics.pva.Type` describes a pvData structure; `repics.pva.Value` holds
 one. Both are extension classes. A `Value` carries a change-mark bitset
 alongside the data: a put sends the marked fields, a monitor update marks
 the fields the server changed, and `SharedPV.post` posts the marked fields.
 
 ```python
-from epicsrs.pva import Type, Value
+from repics.pva import Type, Value
 ```
 
 ## Type specs
@@ -60,7 +60,7 @@ tuple that `aspy()` returns therefore round-trips as
 
 ```python
 import numpy as np
-from epicsrs.pva import Type, Value
+from repics.pva import Type, Value
 
 T = Type([
     ("value", "d"),
@@ -180,7 +180,7 @@ one leaf does not undo the structure mark. Marking the root (a bare
 
 ```python
 import numpy as np
-from epicsrs.pva import Type, Value
+from repics.pva import Type, Value
 
 T = Type([("value", "d"), ("alarm", ("S", "alarm_t", [("severity", "i"), ("message", "s")])),
           ("arr", "ad"), ("names", "as"), ("any", "v"), ("choice", ("U", None, [("i", "i"), ("s", "s")]))])
@@ -265,7 +265,7 @@ KeyError 'no such member field "nope"'
 
 ```python
 import numpy as np
-from epicsrs.pva import Type, Value
+from repics.pva import Type, Value
 
 T = Type([("f", "af"), ("b", "a?"), ("strs", "as"), ("structs", ("aS", "row", [("x", "i")])), ("vs", "av")])
 V = Value(T)

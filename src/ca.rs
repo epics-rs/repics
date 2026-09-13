@@ -192,7 +192,7 @@ const DBR_NAMES: [&str; 7] = ["string", "short", "float", "enum", "char", "long"
 
 /// One read of a channel: the value plus whatever metadata the requested
 /// form carried. Fields the form did not carry are `None`.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct Snapshot {
     #[pyo3(get)]
     name: String,
@@ -321,7 +321,7 @@ impl Snapshot {
 // ---------------------------------------------------------------------------
 
 /// Channel-level facts known without a read.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct ChannelInfo {
     #[pyo3(get)]
     name: String,
@@ -362,7 +362,7 @@ impl From<RsChannelInfo> for ChannelInfo {
 /// `"access_rights"` (with `read`/`write`), `"type_changed"` (with `dbr`,
 /// the new native wire type) or `"lagged"` (the receiver fell behind; poll
 /// `CaChannel.info` for the current state).
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct ConnectionEvent {
     #[pyo3(get)]
     kind: &'static str,
@@ -411,7 +411,7 @@ impl ConnectionEvent {
 }
 
 /// A channel's lifecycle event stream, drained with `recv`.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct CaEvents {
     drain: Drain<broadcast::Receiver<RsConnectionEvent>>,
 }
@@ -460,7 +460,7 @@ impl CaEvents {
 /// A CA client: search engine, virtual circuits and their channels.
 ///
 /// Configuration comes from the `EPICS_CA_*` environment at construction.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct CaContext {
     client: Arc<CaClient>,
 }
@@ -667,7 +667,7 @@ impl CaContext {
 // CaChannel
 // ---------------------------------------------------------------------------
 
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct CaChannel {
     inner: RsChannel,
     name: String,
@@ -993,7 +993,7 @@ impl Monitor {
 
 /// A monitor. Python drains it by calling `recv`; nothing is delivered on
 /// a runtime thread. Dropping or closing it unsubscribes.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct CaSubscription {
     drain: Drain<Monitor>,
     name: String,

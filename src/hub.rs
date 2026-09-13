@@ -28,7 +28,7 @@ use crate::error::map_ca;
 use crate::runtime::{block_on, bounded, into_py_future, runtime};
 
 /// What a subscription task tells Python. The `u8` codes are the wire
-/// between the two sides and are mirrored in `epicsrs._monitor`.
+/// between the two sides and are mirrored in `repics._monitor`.
 enum Item {
     /// A monitor update, with the channel name the snapshot is stamped with.
     Value(u32, Arc<str>, Box<RsSnapshot>),
@@ -265,7 +265,7 @@ async fn run_subscription(
 }
 
 /// One queue fed by any number of subscriptions. See the module docs.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct MonitorHub {
     tx: mpsc::Sender<Item>,
     drain: Drain<mpsc::Receiver<Item>>,

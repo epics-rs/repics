@@ -2,15 +2,15 @@
 
 ::
 
-    from epicsrs import pva
+    from repics import pva
 
     with pva.Context() as ctxt:
         v = ctxt.get("SIM:ai")              # augmented float, .severity, .timestamp, .raw
         ctxt.put("SIM:ao", 2.5)
         sub = ctxt.monitor("SIM:cnt", print)
 
-``epicsrs.pva.asyncio`` is the same API as coroutines, ``epicsrs.pva.nt``
-the Normative Type helpers, ``epicsrs.pva.server`` the server side.
+``repics.pva.asyncio`` is the same API as coroutines, ``repics.pva.nt``
+the Normative Type helpers, ``repics.pva.server`` the server side.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from .._epicsrs import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, PvaRemoteError, PvaTimeout, Type, Value
+from .._repics import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, PvaRemoteError, PvaTimeout, Type, Value
 from .._monitor import ThreadDispatcher
 from . import nt
 from ._common import Cancelled, Disconnected, Finished, RemoteError, TimeoutError, Wrapping, dispatch, effective_conf, put_request
@@ -46,7 +46,7 @@ def _is_list(x: Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
-_dispatcher = ThreadDispatcher(PvaMonitorHub(), "epicsrs pvmonitor")
+_dispatcher = ThreadDispatcher(PvaMonitorHub(), "repics pvmonitor")
 
 
 class Subscription(SubscriptionBase):
@@ -81,7 +81,7 @@ class Context:
 
     ``conf`` overrides ``EPICS_PVA_*`` settings; ``useenv=False`` ignores
     the environment. ``nt``/``unwrap`` select the NT helpers (see
-    ``epicsrs.pva.nt.buildNT``); ``unwrap=False`` returns bare ``Value``.
+    ``repics.pva.nt.buildNT``); ``unwrap=False`` returns bare ``Value``.
     """
 
     def __init__(

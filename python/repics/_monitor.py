@@ -11,7 +11,7 @@ than per update.
 ``LoopDispatcher`` drains in a task on an asyncio loop and awaits
 coroutine callbacks. What a subscription makes of an item (``_event``)
 and how its callback is invoked (``_deliver``) belong to the front end.
-The Channel Access subscription is below; ``epicsrs.pva._monitor`` has
+The Channel Access subscription is below; ``repics.pva._monitor`` has
 the pvAccess one.
 """
 
@@ -37,7 +37,7 @@ from ._dbr import (
     DBR_ENUM_STR,
     ECA_TIMEOUT,
 )
-from ._epicsrs import MonitorHub, Snapshot, _wait_idle
+from ._repics import MonitorHub, Snapshot, _wait_idle
 from ._value import CaNothing, augment
 
 MONITOR_DATATYPES = (None, str, DBR_ENUM_STR, DBR_CHAR_STR, DBR_CHAR_BYTES, DBR_CHAR_UNICODE)
@@ -320,7 +320,7 @@ class SubscriptionBase:
         """Hook: the server changed this client's access rights."""
 
     def _report(self, exc: BaseException) -> None:
-        print(f"epicsrs: callback for {self.name} raised; subscription closed", file=sys.stderr)
+        print(f"repics: callback for {self.name} raised; subscription closed", file=sys.stderr)
         traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
 
     def _mark_closed(self) -> bool:

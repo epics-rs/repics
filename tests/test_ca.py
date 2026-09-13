@@ -5,13 +5,13 @@ import time
 import numpy
 import pytest
 
-import epicsrs
-from epicsrs import aio, ca
+import repics
+from repics import aio, ca
 
 
 def test_caget_double_time_form(ioc):
     v = ca.caget(ioc + "ai")
-    assert isinstance(v, epicsrs.AugmentedFloat)
+    assert isinstance(v, repics.AugmentedFloat)
     assert v == 1.5
     assert v.name == ioc + "ai"
     assert v.ok
@@ -37,10 +37,10 @@ def test_caget_ctrl_form(ioc):
 
 def test_caget_scalar_types(ioc):
     assert ca.caget(ioc + "long") == 42
-    assert isinstance(ca.caget(ioc + "long"), epicsrs.AugmentedInt)
+    assert isinstance(ca.caget(ioc + "long"), repics.AugmentedInt)
     s = ca.caget(ioc + "str")
     assert s == "hello"
-    assert isinstance(s, epicsrs.AugmentedStr)
+    assert isinstance(s, repics.AugmentedStr)
     e = ca.caget(ioc + "mbbo", form="ctrl")
     assert e == 1
     assert e.datatype == "enum"
@@ -68,7 +68,7 @@ def test_caput_array_roundtrip(ioc):
     data = numpy.arange(8, dtype=numpy.float64) * 0.5
     ca.caput(ioc + "wf", data, wait=True)
     v = ca.caget(ioc + "wf")
-    assert isinstance(v, epicsrs.AugmentedArray)
+    assert isinstance(v, repics.AugmentedArray)
     assert v.dtype == numpy.float64
     numpy.testing.assert_array_equal(v, data)
     assert v.element_count == 8
@@ -77,7 +77,7 @@ def test_caput_array_roundtrip(ioc):
 
 def test_cainfo(ioc):
     info = ca.cainfo(ioc + "wf")
-    assert info.datatype == epicsrs.DBR_DOUBLE
+    assert info.datatype == repics.DBR_DOUBLE
     assert info.datatype_name == "double"
     assert info.count == 8
     assert info.read and info.write
@@ -101,7 +101,7 @@ def test_camonitor_delivers_updates(ioc):
 
 def test_missing_pv_times_out(ioc):
     t0 = time.monotonic()
-    with pytest.raises(epicsrs.CaTimeout):
+    with pytest.raises(repics.CaTimeout):
         ca.caget(ioc + "no-such-pv", timeout=0.5)
     assert time.monotonic() - t0 < 2.0
 
@@ -144,12 +144,12 @@ def test_aio_camonitor_async_callback(ioc):
 
 def test_throw_false_returns_ca_nothing(ioc):
     v = ca.caget(ioc + "no-such-pv", timeout=0.3, throw=False)
-    assert isinstance(v, epicsrs.CaNothing)
+    assert isinstance(v, repics.CaNothing)
     assert not v.ok and not v
-    assert v.errorcode == epicsrs.ECA_TIMEOUT
+    assert v.errorcode == repics.ECA_TIMEOUT
     assert v.name == ioc + "no-such-pv"
-    assert repr(v) == f"CaNothing({ioc + 'no-such-pv'!r}, {epicsrs.ECA_TIMEOUT})"
-    assert str(v).endswith(epicsrs.ca_message(epicsrs.ECA_TIMEOUT))
+    assert repr(v) == f"CaNothing({ioc + 'no-such-pv'!r}, {repics.ECA_TIMEOUT})"
+    assert str(v).endswith(repics.ca_message(repics.ECA_TIMEOUT))
     with pytest.raises(TypeError):
         iter(v)
 
@@ -157,14 +157,14 @@ def test_throw_false_returns_ca_nothing(ioc):
 def test_list_with_missing_pv_keeps_shape(ioc):
     vs = ca.caget([ioc + "ai", ioc + "missing", ioc + "long"], timeout=0.3, throw=False)
     assert vs[0] == 1.5 and vs[2] == 42
-    assert isinstance(vs[1], epicsrs.CaNothing) and vs[1].errorcode == epicsrs.ECA_TIMEOUT
-    with pytest.raises(epicsrs.CaTimeout):
+    assert isinstance(vs[1], repics.CaNothing) and vs[1].errorcode == repics.ECA_TIMEOUT
+    with pytest.raises(repics.CaTimeout):
         ca.caget([ioc + "ai", ioc + "missing"], timeout=0.3)
 
 
 def test_caput_returns_ca_nothing_and_lists(ioc):
     r = ca.caput(ioc + "ao", 1.0, wait=True)
-    assert isinstance(r, epicsrs.CaNothing) and r.ok and r
+    assert isinstance(r, repics.CaNothing) and r.ok and r
     rs = ca.caput([ioc + "ao", ioc + "long"], [2.0, 5], wait=True)
     assert all(x.ok for x in rs)
     assert ca.caget(ioc + "ao") == 2.0 and ca.caget(ioc + "long") == 5
@@ -176,9 +176,9 @@ def test_caput_returns_ca_nothing_and_lists(ioc):
 
 
 def test_caput_read_only_field_fails(ioc):
-    with pytest.raises(epicsrs.CaError) as e:
+    with pytest.raises(repics.CaError) as e:
         ca.caput(ioc + "ro", 1, wait=True, timeout=2.0)
-    assert e.value.status != epicsrs.ECA_NORMAL
+    assert e.value.status != repics.ECA_NORMAL
     r = ca.caput(ioc + "ro", 1, wait=True, timeout=2.0, throw=False)
     assert not r.ok
     assert ca.caget(ioc + "ro") == 7
@@ -186,16 +186,16 @@ def test_caput_read_only_field_fails(ioc):
 
 def test_datatype_conversions(ioc):
     s = ca.caget(ioc + "ai", datatype=str)
-    assert isinstance(s, epicsrs.AugmentedStr) and float(s) == 1.5
-    assert s.dbr == epicsrs.DBR_STRING
+    assert isinstance(s, repics.AugmentedStr) and float(s) == 1.5
+    assert s.dbr == repics.DBR_STRING
     i = ca.caget(ioc + "ai", datatype=int)
-    assert isinstance(i, epicsrs.AugmentedInt) and i == 1 and i.dbr == epicsrs.DBR_LONG
+    assert isinstance(i, repics.AugmentedInt) and i == 1 and i.dbr == repics.DBR_LONG
     f = ca.caget(ioc + "long", datatype=float)
-    assert isinstance(f, epicsrs.AugmentedFloat) and f == 42.0
-    e = ca.caget(ioc + "mbbo", datatype=epicsrs.DBR_ENUM_STR)
-    assert isinstance(e, epicsrs.AugmentedStr) and e in ("Zero", "One", "Two")
+    assert isinstance(f, repics.AugmentedFloat) and f == 42.0
+    e = ca.caget(ioc + "mbbo", datatype=repics.DBR_ENUM_STR)
+    assert isinstance(e, repics.AugmentedStr) and e in ("Zero", "One", "Two")
     d = ca.caget(ioc + "ai", datatype=numpy.float32)
-    assert d.dbr == epicsrs.DBR_FLOAT
+    assert d.dbr == repics.DBR_FLOAT
     with pytest.raises(TypeError):
         ca.caget(ioc + "ai", datatype=complex)
     with pytest.raises(ValueError):
@@ -203,13 +203,13 @@ def test_datatype_conversions(ioc):
 
 
 def test_char_string_roundtrip(ioc):
-    assert ca.caput(ioc + "chars", "héllo", datatype=epicsrs.DBR_CHAR_STR, wait=True).ok
-    v = ca.caget(ioc + "chars", datatype=epicsrs.DBR_CHAR_STR)
-    assert isinstance(v, epicsrs.AugmentedStr) and v == "héllo"
-    b = ca.caget(ioc + "chars", datatype=epicsrs.DBR_CHAR_BYTES)
-    assert isinstance(b, epicsrs.AugmentedBytes) and b == "héllo".encode()
+    assert ca.caput(ioc + "chars", "héllo", datatype=repics.DBR_CHAR_STR, wait=True).ok
+    v = ca.caget(ioc + "chars", datatype=repics.DBR_CHAR_STR)
+    assert isinstance(v, repics.AugmentedStr) and v == "héllo"
+    b = ca.caget(ioc + "chars", datatype=repics.DBR_CHAR_BYTES)
+    assert isinstance(b, repics.AugmentedBytes) and b == "héllo".encode()
     raw = ca.caget(ioc + "chars")
-    assert isinstance(raw, epicsrs.AugmentedArray) and raw.dtype == numpy.uint8
+    assert isinstance(raw, repics.AugmentedArray) and raw.dtype == numpy.uint8
 
 
 def test_count_conventions(ioc):
@@ -225,11 +225,11 @@ def test_count_conventions(ioc):
 def test_cainfo_states_and_lists(ioc):
     infos = ca.cainfo([ioc + "ai", ioc + "missing"], timeout=0.3, throw=False)
     assert infos[0].state == 2 and infos[0].datatype_name == "double"
-    assert isinstance(infos[1], epicsrs.CaNothing)
+    assert isinstance(infos[1], repics.CaNothing)
     info = ca.cainfo(ioc + "missing", wait=False)
-    assert info.state == 0 and info.host == "<disconnected>" and info.datatype == epicsrs.DBR_NO_ACCESS
+    assert info.state == 0 and info.host == "<disconnected>" and info.datatype == repics.DBR_NO_ACCESS
     assert "never connected" in str(info)
-    names = {s.name for s in epicsrs.get_channel_infos()}
+    names = {s.name for s in repics.get_channel_infos()}
     assert ioc + "ai" in names and ioc + "missing" in names
 
 
@@ -243,7 +243,7 @@ def test_camonitor_connect_timeout_then_keeps_waiting(ioc):
 
     with ca.camonitor(ioc + "never", cb, connect_timeout=0.3) as sub:
         assert ev.wait(2.0)
-        assert isinstance(got[0], epicsrs.CaNothing) and got[0].errorcode == epicsrs.ECA_TIMEOUT
+        assert isinstance(got[0], repics.CaNothing) and got[0].errorcode == repics.ECA_TIMEOUT
         assert sub.state == sub.OPENING
     assert sub.state == sub.CLOSED
 
@@ -289,7 +289,7 @@ def test_camonitor_list_index_and_mask(ioc):
         if len(got) == 2:
             ev.set()
 
-    subs = ca.camonitor([ioc + "ai", ioc + "ao"], cb, form="ctrl", mask=epicsrs.DBE_VALUE)
+    subs = ca.camonitor([ioc + "ai", ioc + "ao"], cb, form="ctrl", mask=repics.DBE_VALUE)
     try:
         assert ev.wait(2.0)
     finally:
@@ -313,7 +313,7 @@ def test_camonitor_callback_exception_closes(ioc, capfd):
     assert closed.is_set()
     err = capfd.readouterr().err
     assert "boom" in err and "subscription closed" in err
-    assert not any(s.subscriber_count for s in epicsrs.get_channel_infos() if s.name == ioc + "cnt")
+    assert not any(s.subscriber_count for s in repics.get_channel_infos() if s.name == ioc + "cnt")
 
 
 def test_camonitor_datatype_str_and_enum(ioc):
@@ -324,9 +324,9 @@ def test_camonitor_datatype_str_and_enum(ioc):
         got.append(v)
         ev.set()
 
-    with ca.camonitor(ioc + "mbbo", cb, datatype=epicsrs.DBR_ENUM_STR):
+    with ca.camonitor(ioc + "mbbo", cb, datatype=repics.DBR_ENUM_STR):
         assert ev.wait(2.0)
-    assert isinstance(got[0], epicsrs.AugmentedStr) and got[0] in ("Zero", "One", "Two")
+    assert isinstance(got[0], repics.AugmentedStr) and got[0] in ("Zero", "One", "Two")
     with pytest.raises(TypeError):
         ca.camonitor(ioc + "ai", cb, datatype=int)
 
@@ -349,15 +349,15 @@ def test_subscription_pause_resume(ioc):
 
 
 def test_connection_events_on_a_fresh_channel(ioc):
-    ch = epicsrs.context().channel(ioc + "ai")
+    ch = repics.context().channel(ioc + "ai")
     events = ch.events()
     try:
         ev = events.recv(timeout=2.0)
         assert ev is not None and ev.kind == "connected"
-        assert ch.connected and ch.dbr == epicsrs.DBR_DOUBLE and ch.element_count == 1
+        assert ch.connected and ch.dbr == repics.DBR_DOUBLE and ch.element_count == 1
         ev = events.recv(timeout=2.0)
         assert ev.kind == "access_rights" and ev.read and ev.write
-        with pytest.raises(epicsrs.CaTimeout):
+        with pytest.raises(repics.CaTimeout):
             events.recv(timeout=0.2)
     finally:
         events.close()
@@ -365,22 +365,22 @@ def test_connection_events_on_a_fresh_channel(ioc):
 
 
 def test_snapshot_pull_api(ioc):
-    ch = epicsrs.context().channel(ioc + "cnt")
+    ch = repics.context().channel(ioc + "cnt")
     ch.wait_connected(2.0)
     with ch.subscribe() as sub:
         a = sub.recv(timeout=2.0)
         b = sub.recv(timeout=2.0)
-        assert isinstance(a, epicsrs.Snapshot) and a.name == ioc + "cnt"
+        assert isinstance(a, repics.Snapshot) and a.name == ioc + "cnt"
         assert b.value > a.value
         batch = sub.recv_batch(timeout=2.0)
-        assert batch and all(isinstance(s, epicsrs.Snapshot) for s in batch)
+        assert batch and all(isinstance(s, repics.Snapshot) for s in batch)
     assert sub.recv() is None
 
 
 def test_augmented_metadata_is_lazy(ioc):
     v = ca.caget(ioc + "ai", form="ctrl")
-    assert isinstance(v.snapshot, epicsrs.Snapshot)
-    assert v.snapshot.dbr == epicsrs.DBR_DOUBLE
+    assert isinstance(v.snapshot, repics.Snapshot)
+    assert v.snapshot.dbr == repics.DBR_DOUBLE
     assert v.units == "mm" and v.timestamp == 0.0
     assert ca.caget(ioc + "ai").datetime.year >= 2020
     w = ca.caget(ioc + "wf")
@@ -397,12 +397,12 @@ def test_aio_lists_and_throw(ioc):
         assert all(r.ok for r in rs)
         vs = await aio.caget([ioc + "ao", ioc + "long", ioc + "missing"], timeout=0.3, throw=False)
         assert vs[0] == 4.5 and vs[1] == 6
-        assert isinstance(vs[2], epicsrs.CaNothing)
+        assert isinstance(vs[2], repics.CaNothing)
         infos = await aio.cainfo([ioc + "ao", ioc + "missing"], timeout=0.3, throw=False)
-        assert infos[0].state == 2 and isinstance(infos[1], epicsrs.CaNothing)
+        assert infos[0].state == 2 and isinstance(infos[1], repics.CaNothing)
         c = await aio.connect(ioc + "ao")
         assert c.ok
-        with pytest.raises(epicsrs.CaTimeout):
+        with pytest.raises(repics.CaTimeout):
             await aio.caget(ioc + "missing", timeout=0.3)
         await aio.caput(ioc + "long", 42, wait=True)
 
@@ -421,7 +421,7 @@ def test_aio_camonitor_connect_timeout_and_exception(ioc, capfd):
         sub = aio.camonitor(ioc + "never", cb, connect_timeout=0.3)
         await asyncio.wait_for(ev.wait(), 2.0)
         sub.close()
-        assert isinstance(got[0], epicsrs.CaNothing) and got[0].errorcode == epicsrs.ECA_TIMEOUT
+        assert isinstance(got[0], repics.CaNothing) and got[0].errorcode == repics.ECA_TIMEOUT
 
         def bad(v):
             raise RuntimeError("async boom")
@@ -458,7 +458,7 @@ def test_aio_camonitor_collapses(ioc):
 
 
 def test_pv_class(ioc):
-    from epicsrs.pv import PV, get_pv
+    from repics.pv import PV, get_pv
 
     calls = []
     conns = []

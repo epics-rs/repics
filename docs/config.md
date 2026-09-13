@@ -11,15 +11,15 @@ enable.
 
 | Variable | Default | Read | Meaning |
 | --- | --- | --- | --- |
-| `EPICSRS_WORKERS` | `1` | once, when the runtime starts on first use | number of tokio worker threads (named `epicsrs-rt`); values below 1 become 1, an unparsable value is the default. A process that runs a PVA `Server` and a `Context` together saw intermittent `get` timeouts with one worker and none with four (see [pva-client.md](pva-client.md)) |
+| `REPICS_WORKERS` | `1` | once, when the runtime starts on first use | number of tokio worker threads (named `repics-rt`); values below 1 become 1, an unparsable value is the default. A process that runs a PVA `Server` and a `Context` together saw intermittent `get` timeouts with one worker and none with four (see [pva-client.md](pva-client.md)) |
 
 ```python
 import os, sys
 from pathlib import Path
-import epicsrs
-epicsrs.context()   # first use starts the runtime
+import repics
+repics.context()   # first use starts the runtime
 names = [p.read_text().strip() for p in Path("/proc/self/task").glob("*/comm")]
-print(os.environ.get("EPICSRS_WORKERS"), names.count("epicsrs-rt"))
+print(os.environ.get("REPICS_WORKERS"), names.count("repics-rt"))
 ```
 
 Run with the variable unset, at `3` and at `0`:
@@ -33,7 +33,7 @@ None 1
 ## CA client
 
 Read by `epics-ca-rs` when the CA context is created (the first
-`epicsrs.ca`, `epicsrs.aio`, `epicsrs.pv` call, or `CaContext()`), unless
+`repics.ca`, `repics.aio`, `repics.pv` call, or `CaContext()`), unless
 the "Read" column says otherwise. Every front end shares one context, so a
 change after the first call has no effect on it.
 
@@ -62,7 +62,7 @@ extension does not run; the same holds for every `EPICS_CAS_*` variable,
 `EPICS_RS_HAG_DNS_REFRESH_SECS` and `EPICS_CA_RS_CHAOS`. `EPICS_CLI_TIMEOUT`
 belongs to the crate's command-line tools.
 
-The CA client (`epicsrs.ca`, `epicsrs.aio`, `epicsrs.pv`) has no
+The CA client (`repics.ca`, `repics.aio`, `repics.pv`) has no
 configuration argument; the environment is the only way to set it.
 
 ## PVA client
@@ -119,13 +119,13 @@ all of them.
 The crates log through `tracing`. `PVXS_LOG`, `EPICS_PVA_LOG` and
 `RUST_LOG` are only consulted by a `tracing` subscriber, and the extension
 installs none, so nothing the crates log reaches the terminal. Python-side
-diagnostics go to the `logging` loggers `epicsrs.pva` (monitor callback
-exceptions) and `epicsrs.pva.server` (handler exceptions), and to stderr
+diagnostics go to the `logging` loggers `repics.pva` (monitor callback
+exceptions) and `repics.pva.server` (handler exceptions), and to stderr
 for a `camonitor` callback that raises.
 
 ## Not read in this build
 
-The `epicsrs` extension depends on the crates with their default Cargo
+The `repics` extension depends on the crates with their default Cargo
 features. These variables are read only under features that are off:
 
 | Variable | Feature |

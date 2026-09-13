@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable
 
-from ..._epicsrs import PvaWorkQueue
+from ..._repics import PvaWorkQueue
 from ._base import Handler, Server, ServerOperation, SharedPVBase, StaticProvider, deliver, fail_op
 
 __all__ = ["SharedPV", "Handler", "ServerOperation", "StaticProvider", "Server", "WorkQueue"]
@@ -21,7 +21,7 @@ class WorkQueue:
 
     def __init__(self) -> None:
         self._raw = PvaWorkQueue()
-        self._thread = threading.Thread(target=self._run, name="epicsrs.pva.server", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="repics.pva.server", daemon=True)
         self._thread.start()
 
     def _run(self) -> None:

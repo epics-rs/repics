@@ -1,4 +1,4 @@
-"""`python/epicsrs/_epicsrs.pyi` must describe the built extension exactly.
+"""`python/repics/_repics.pyi` must describe the built extension exactly.
 
 No type checker is assumed: the stub is parsed with `ast` and compared
 with the live module, name by name and parameter by parameter.
@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-import epicsrs  # noqa: F401  # applies the `CaError.status` property
-from epicsrs import _epicsrs as ext
+import repics  # noqa: F401  # applies the `CaError.status` property
+from repics import _repics as ext
 
-STUB = Path(epicsrs.__file__).with_name("_epicsrs.pyi")
+STUB = Path(repics.__file__).with_name("_repics.pyi")
 
 # Dunders the stub must spell out when the class defines them itself.
 DUNDERS = {

@@ -33,7 +33,7 @@ use super::value::Value;
 use crate::ca::Drain;
 use crate::runtime::{block_on, into_py_future};
 
-/// The item kinds `recv_batch` yields; mirrored in `epicsrs.pva._monitor`.
+/// The item kinds `recv_batch` yields; mirrored in `repics.pva._monitor`.
 pub const KIND_VALUE: u8 = 0;
 pub const KIND_CONNECTED: u8 = 1;
 pub const KIND_DISCONNECTED: u8 = 2;
@@ -213,7 +213,7 @@ fn lock(subs: &Subs) -> MutexGuard<'_, HashMap<u32, Entry>> {
 }
 
 /// One wake for any number of monitors. See the module docs.
-#[pyclass(frozen, module = "epicsrs._epicsrs")]
+#[pyclass(frozen, module = "repics._repics")]
 pub struct PvaMonitorHub {
     ready: mpsc::UnboundedSender<u32>,
     drain: Drain<mpsc::UnboundedReceiver<u32>>,

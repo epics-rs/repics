@@ -14,19 +14,19 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 create_exception!(
-    epicsrs,
+    repics,
     CaError,
     PyException,
     "Channel Access operation failed; args are (message, eca_status)."
 );
 create_exception!(
-    epicsrs,
+    repics,
     CaTimeout,
     CaError,
     "Channel Access operation timed out."
 );
 create_exception!(
-    epicsrs,
+    repics,
     CaDisconnected,
     CaError,
     "The channel is not connected."

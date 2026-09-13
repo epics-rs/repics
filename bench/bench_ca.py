@@ -1,4 +1,4 @@
-"""Channel Access client benchmark: epicsrs vs pyepics vs aioca.
+"""Channel Access client benchmark: repics vs pyepics vs aioca.
 
 Spawns one softioc-rs with N ``ao`` records and one waveform, then runs
 each library in its own process against it and prints one table.
@@ -15,7 +15,7 @@ Measured per library:
 * ``monitor``    callbacks/s and CPU per callback on one PV under a put storm
 * ``monitor N``  the same across N monitored PVs under a round-robin storm
 
-The storm writer is always epicsrs in a separate process, four threads of
+The storm writer is always repics in a separate process, four threads of
 ``caput(wait=True)`` so every put is a distinct event the server has
 queued; ``received/sent`` shows what the server coalesced away.
 
@@ -111,15 +111,15 @@ def timed(fn, reps: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# the storm writer (always epicsrs)
+# the storm writer (always repics)
 
 
 def storm(pvs: list[str], puts: int, threads: int = 4) -> None:
     """Paced writer: every put waits for the record to process, so each one
     is a distinct event the server has queued before the next arrives.
-    Several threads keep the IOC busy (epicsrs releases the GIL while it
+    Several threads keep the IOC busy (repics releases the GIL while it
     waits)."""
-    from epicsrs import ca
+    from repics import ca
 
     ca.connect(pvs)
     n = len(pvs)
@@ -207,10 +207,10 @@ class MonitorCounter:
 # per-library drivers
 
 
-def bench_epicsrs(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dict:
+def bench_repics(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dict:
     import numpy
 
-    from epicsrs import ca
+    from repics import ca
 
     one = pvs[0]
     ca.connect(pvs + [wf])
@@ -238,12 +238,12 @@ def bench_epicsrs(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> d
     return r
 
 
-def bench_epicsrs_aio(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dict:
+def bench_repics_aio(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dict:
     import asyncio
 
     import numpy
 
-    from epicsrs import aio
+    from repics import aio
 
     async def atimed(fn, reps):
         out = []
@@ -368,8 +368,8 @@ def bench_aioca(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dic
 
 
 LIBS = {
-    "epicsrs": bench_epicsrs,
-    "epicsrs.aio": bench_epicsrs_aio,
+    "repics": bench_repics,
+    "repics.aio": bench_repics_aio,
     "pyepics": bench_pyepics,
     "aioca": bench_aioca,
 }
@@ -422,7 +422,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pin", help="CPUs for the IOC and every client, e.g. 2,3,4,5")
     ap.add_argument("--hot", action="store_true", help="keep the SMT siblings of --pin busy")
-    ap.add_argument("--softioc", default=os.environ.get("EPICSRS_SOFTIOC") or shutil.which("softioc-rs"))
+    ap.add_argument("--softioc", default=os.environ.get("REPICS_SOFTIOC") or shutil.which("softioc-rs"))
     ap.add_argument("--pvs", type=int, default=100)
     ap.add_argument("--reads", type=int, default=2000)
     ap.add_argument("--libs", default=",".join(LIBS))
@@ -440,7 +440,7 @@ def main() -> None:
         return
 
     if not a.softioc:
-        sys.exit("no softioc-rs: pass --softioc or set EPICSRS_SOFTIOC")
+        sys.exit("no softioc-rs: pass --softioc or set REPICS_SOFTIOC")
     cpus = sorted(int(c) for c in a.pin.split(",")) if a.pin else sorted(os.sched_getaffinity(0))
     if a.pin:
         os.sched_setaffinity(0, cpus)  # inherited by the IOC and the clients

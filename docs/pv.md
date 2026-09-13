@@ -1,10 +1,10 @@
-# epicsrs.pv
+# repics.pv
 
 A pyepics-shaped `PV` class over the shared CA context, with a cached
 value, a monitor, and keyword-argument callbacks.
 
 ```python
-from epicsrs.pv import PV, get_pv
+from repics.pv import PV, get_pv
 ```
 
 ## PV
@@ -19,7 +19,7 @@ class PV(pvname, callback=None, form='time', auto_monitor=None,
 | --- | --- |
 | `pvname` | the channel name |
 | `callback` | a value callback, registered as with `add_callback` |
-| `form` | the metadata a read or monitor carries: `'time'` or `'ctrl'` (any `epicsrs.ca` form is accepted) |
+| `form` | the metadata a read or monitor carries: `'time'` or `'ctrl'` (any `repics.ca` form is accepted) |
 | `auto_monitor` | `None` (the default) monitors channels of at most `AUTOMONITOR_MAXLENGTH` elements; `True` or `False` forces it on or off; an `int` that is not a `bool` is the DBE mask to monitor with |
 | `connection_callback` | called as `cb(pvname=, conn=, pv=)` on every connection and disconnection |
 | `connection_timeout` | the default for `wait_for_connection` |
@@ -109,7 +109,7 @@ in this cache.
 
 ```python
 import time
-from epicsrs.pv import PV, get_pv
+from repics.pv import PV, get_pv
 
 p = PV("demo:ai")
 print(p.wait_for_connection(), p, p.connected)
@@ -190,7 +190,7 @@ Connection and access callbacks:
 
 ```python
 import time
-from epicsrs.pv import PV
+from repics.pv import PV
 
 def on_conn(pvname=None, conn=None, pv=None):
     print("connection", pvname, conn, pv.connected)

@@ -17,7 +17,7 @@ from p4p.nt import NTEnum, NTNDArray, NTScalar, NTTable  # noqa: E402
 from p4p.server import Server, StaticProvider  # noqa: E402
 from p4p.server.thread import SharedPV  # noqa: E402
 
-PREFIX = "epicsrs-pva-test:"
+PREFIX = "repics-pva-test:"
 IMAGE_SHAPE = (1000, 1000)  # 1e6 elements: the zero-copy proof needs a big one
 
 
@@ -70,7 +70,7 @@ def p4p_pvs():
         "table": table,
         "ndarray": ndarray,
     }
-    provider = StaticProvider("epicsrs-test")
+    provider = StaticProvider("repics-test")
     for name, pv in pvs.items():
         provider.add(PREFIX + name, pv)
     with Server(providers=[provider], isolate=True) as server:

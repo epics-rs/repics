@@ -1,4 +1,4 @@
-"""epicsrs.pva.server against a p4p client."""
+"""repics.pva.server against a p4p client."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import pytest
 from p4p.client.thread import Context, RemoteError
 from p4p.nt import NTURI
 
-from epicsrs.pva import Value
-from epicsrs.pva.nt import NTEnum, NTNDArray, NTScalar, NTTable
-from epicsrs.pva.server import Handler, Server, SharedPV, StaticProvider
+from repics.pva import Value
+from repics.pva.nt import NTEnum, NTNDArray, NTScalar, NTTable
+from repics.pva.server import Handler, Server, SharedPV, StaticProvider
 
-P = "epicsrs-srv-test:"
+P = "repics-srv-test:"
 
 
 def _wait(pred, timeout=5.0):

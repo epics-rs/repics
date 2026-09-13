@@ -1,15 +1,15 @@
 [package]
-name = "epicsrs"
+name = "repics"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "EPICS"
 description = "Python bindings for epics-rs: EPICS Channel Access and pvAccess"
-repository = "https://github.com/epics-rs/epicsrs"
+repository = "https://github.com/epics-rs/repics"
 publish = false
 
 [lib]
-name = "_epicsrs"
+name = "_repics"
 crate-type = ["cdylib"]
 
 [dependencies]

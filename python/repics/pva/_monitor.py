@@ -2,7 +2,7 @@
 
 The hub keeps a bounded queue per monitor in Rust, squashing updates at
 its ``limit`` when the consumer falls behind (the pvxs client rule), and
-wakes the flavour's one dispatcher (``epicsrs._monitor``) when any monitor
+wakes the flavour's one dispatcher (``repics._monitor``) when any monitor
 has something. Nothing is collapsed in Python: ``all_updates`` is True so
 the dispatcher delivers every item the Rust queue let through.
 """

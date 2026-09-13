@@ -1,9 +1,9 @@
 """A pyepics-shaped ``PV``: one object per channel with a cached value,
 keyword-argument callbacks and the familiar property names.
 
-This is a thin shell over ``epicsrs.ca``: reads raise on failure (pyepics
+This is a thin shell over ``repics.ca``: reads raise on failure (pyepics
 returns ``None``); ``get(use_monitor=True)`` returns the last monitored
-value when a monitor is running; callbacks run on the ``epicsrs.ca``
+value when a monitor is running; callbacks run on the ``repics.ca``
 monitor dispatcher thread with pyepics' keyword arguments (``pvname``,
 ``value``, ``char_value``, ``timestamp``, ``severity``, ``status``,
 ``units``, ``enum_strs``, ...). Every ``PV`` is one hub subscription: it

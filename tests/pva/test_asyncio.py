@@ -1,4 +1,4 @@
-"""asyncio flavours: epicsrs.pva.asyncio.Context and epicsrs.pva.server.asyncio.SharedPV."""
+"""asyncio flavours: repics.pva.asyncio.Context and repics.pva.server.asyncio.SharedPV."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from p4p.client.thread import Context as P4PContext
 from p4p.client.thread import RemoteError as P4PRemoteError
 from p4p.nt import NTURI as P4PNTURI
 
-from epicsrs.pva import Disconnected, PvaError, PvaRemoteError, PvaTimeout, Value
-from epicsrs.pva.asyncio import Context
-from epicsrs.pva.nt import NTScalar, NTURI
-from epicsrs.pva.server import Server, StaticProvider
-from epicsrs.pva.server.asyncio import SharedPV
+from repics.pva import Disconnected, PvaError, PvaRemoteError, PvaTimeout, Value
+from repics.pva.asyncio import Context
+from repics.pva.nt import NTScalar, NTURI
+from repics.pva.server import Server, StaticProvider
+from repics.pva.server.asyncio import SharedPV
 
-P = "epicsrs-aio-test:"
+P = "repics-aio-test:"
 
 
 async def _until(pred, timeout=5.0):

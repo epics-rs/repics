@@ -8,21 +8,21 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
-create_exception!(epicsrs, PvaError, PyException, "pvAccess operation failed.");
+create_exception!(repics, PvaError, PyException, "pvAccess operation failed.");
 create_exception!(
-    epicsrs,
+    repics,
     PvaTimeout,
     PvaError,
     "pvAccess operation timed out."
 );
 create_exception!(
-    epicsrs,
+    repics,
     PvaDisconnected,
     PvaError,
     "The channel is not connected."
 );
 create_exception!(
-    epicsrs,
+    repics,
     PvaRemoteError,
     PvaError,
     "The server rejected the operation."

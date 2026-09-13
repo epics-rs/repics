@@ -14,10 +14,10 @@ import uuid
 import weakref
 from typing import Any, Callable
 
-from ..._epicsrs import PvaProvider, PvaServer, PvaSharedPV, Value
+from ..._repics import PvaProvider, PvaServer, PvaSharedPV, Value
 from .._common import RemoteError
 
-log = logging.getLogger("epicsrs.pva.server")
+log = logging.getLogger("repics.pva.server")
 
 __all__ = ["Handler", "ServerOperation", "StaticProvider", "Server", "log"]
 

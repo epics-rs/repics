@@ -1,13 +1,13 @@
 # Normative types
 
-`epicsrs.pva.nt` builds and interprets the standard pvAccess structures.
+`repics.pva.nt` builds and interprets the standard pvAccess structures.
 Each helper has a `type` (a `Type`), `wrap(python) -> Value`,
 `unwrap(Value) -> python` and `assign(Value, python)`. A `Context` uses
 `unwrap` on every read and `assign` on `put`; a `SharedPV(nt=...)` uses
 `wrap` on `open`/`post` and `unwrap` for `current()` and `op.value()`.
 
 ```python
-from epicsrs.pva.nt import NTScalar, NTEnum, NTTable, NTNDArray, NTURI, NTBase, ntenum, alarm, timeStamp, defaultNT
+from repics.pva.nt import NTScalar, NTEnum, NTTable, NTNDArray, NTURI, NTBase, ntenum, alarm, timeStamp, defaultNT
 ```
 
 | Name | Structure id |
@@ -142,8 +142,8 @@ dict) or to a `value` field (`TypeError` when there is none).
 
 ```python
 import numpy as np
-from epicsrs.pva import Value
-from epicsrs.pva.nt import NTScalar, NTEnum, NTTable, NTNDArray, NTURI, defaultNT, timeStamp, alarm
+from repics.pva import Value
+from repics.pva.nt import NTScalar, NTEnum, NTTable, NTNDArray, NTURI, defaultNT, timeStamp, alarm
 
 print(NTScalar.buildType("d"))
 V = NTScalar("d", display=True).wrap(1.5, timestamp=1700000000.5, severity=1, message="warn")
@@ -203,7 +203,7 @@ time_t alarm_t
 
 ```python
 import numpy as np
-from epicsrs.pva.nt import NTEnum, NTTable, NTNDArray, NTURI, ntenum
+from repics.pva.nt import NTEnum, NTTable, NTNDArray, NTURI, ntenum
 
 E = NTEnum()
 V = E.wrap(1, choices=["Off", "On"])

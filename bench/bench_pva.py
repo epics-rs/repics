@@ -1,10 +1,10 @@
-"""pvAccess benchmark: epicsrs vs p4p, client side and server side.
+"""pvAccess benchmark: repics vs p4p, client side and server side.
 
     python bench/bench_pva.py [--pvs 100] [--reads 2000] [--puts 20000] [--pin 2,3,4,5 --hot]
 
 Client rows (``--libs``): every client library in its own process against
 the SAME server. ``softioc-rs`` serves Channel Access only (no QSRV), so
-that server is an epicsrs thread ``SharedPV`` server in its own process,
+that server is an repics thread ``SharedPV`` server in its own process,
 N ``NTScalar('d')`` PVs plus one 10 000-double ``NTScalar('ad')``, whose
 put handler posts what it is given.
 
@@ -18,7 +18,7 @@ put handler posts what it is given.
 * ``monitor``    callbacks/s and CPU per callback on one PV under a put storm
 * ``monitor N``  the same across N monitored PVs under a round-robin storm
 
-The client-row storm writer is always epicsrs in a separate process, four
+The client-row storm writer is always repics in a separate process, four
 threads of ``put(wait=True)`` with a prebuilt ``Value`` (one round trip),
 so every put is a distinct post the server has queued before the next
 arrives; ``received/sent`` shows what was squashed on the way.
@@ -136,9 +136,9 @@ def make_handlers(pvs_ref: list, stats_ref: list, puts: int):
 def serve_thread(lib: str, prefix: str, n: int, puts: int) -> None:
     import numpy
 
-    if lib == "epicsrs":
-        from epicsrs.pva.nt import NTScalar
-        from epicsrs.pva.server import Server, SharedPV
+    if lib == "repics":
+        from repics.pva.nt import NTScalar
+        from repics.pva.server import Server, SharedPV
     else:
         from p4p.nt import NTScalar
         from p4p.server import Server
@@ -165,10 +165,10 @@ def serve_asyncio(lib: str, prefix: str, n: int, puts: int) -> None:
 
     import numpy
 
-    if lib == "epicsrs":
-        from epicsrs.pva.nt import NTScalar
-        from epicsrs.pva.server import Server
-        from epicsrs.pva.server.asyncio import SharedPV
+    if lib == "repics":
+        from repics.pva.nt import NTScalar
+        from repics.pva.server import Server
+        from repics.pva.server.asyncio import SharedPV
     else:
         from p4p.nt import NTScalar
         from p4p.server import Server
@@ -194,24 +194,24 @@ def serve_asyncio(lib: str, prefix: str, n: int, puts: int) -> None:
 
 
 SERVERS = {
-    "epicsrs": partial(serve_thread, "epicsrs"),
-    "epicsrs.asyncio": partial(serve_asyncio, "epicsrs"),
+    "repics": partial(serve_thread, "repics"),
+    "repics.asyncio": partial(serve_asyncio, "repics"),
     "p4p": partial(serve_thread, "p4p"),
     "p4p.asyncio": partial(serve_asyncio, "p4p"),
 }
 
 
 # ---------------------------------------------------------------------------
-# the client-row storm writer (always epicsrs)
+# the client-row storm writer (always repics)
 
 
 def storm(pvs: list[str], puts: int, threads: int = 4) -> None:
     """Paced writer: every put waits for the server's put handler to have
     posted, so each one is a distinct event queued before the next
-    arrives. Four threads keep the server busy (epicsrs releases the GIL
+    arrives. Four threads keep the server busy (repics releases the GIL
     while it waits). A prebuilt ``Value`` per PV makes a put one round
     trip rather than get-then-put."""
-    from epicsrs.pva import Context, Value
+    from repics.pva import Context, Value
 
     ctxt = Context()
     vals = {pv: Value(ctxt.info(pv)) for pv in pvs}
@@ -256,8 +256,8 @@ def run_storm(pvs: list[str], puts: int, env: dict[str, str]) -> subprocess.Pope
 # per-client-library drivers (``--lib LIB``)
 
 
-def bench_epicsrs(pvs: list[str], wf: str, reads: int, puts: int, env: dict[str, str]) -> dict:
-    from epicsrs.pva import Context
+def bench_repics(pvs: list[str], wf: str, reads: int, puts: int, env: dict[str, str]) -> dict:
+    from repics.pva import Context
 
     one = pvs[0]
     ctxt = Context()
@@ -286,10 +286,10 @@ def bench_epicsrs(pvs: list[str], wf: str, reads: int, puts: int, env: dict[str,
     return r
 
 
-def bench_epicsrs_asyncio(pvs: list[str], wf: str, reads: int, puts: int, env: dict[str, str]) -> dict:
+def bench_repics_asyncio(pvs: list[str], wf: str, reads: int, puts: int, env: dict[str, str]) -> dict:
     import asyncio
 
-    from epicsrs.pva.asyncio import Context
+    from repics.pva.asyncio import Context
 
     async def atimed(fn, reps):
         out = []
@@ -408,8 +408,8 @@ def bench_p4p_asyncio(pvs: list[str], wf: str, reads: int, puts: int, env: dict[
 
 
 LIBS = {
-    "epicsrs": bench_epicsrs,
-    "epicsrs.asyncio": bench_epicsrs_asyncio,
+    "repics": bench_repics,
+    "repics.asyncio": bench_repics_asyncio,
     "p4p": bench_p4p,
     "p4p.asyncio": bench_p4p_asyncio,
 }
@@ -521,7 +521,7 @@ def main() -> None:
     servers: dict[str, dict] = {}
     try:
         if a.libs:
-            server, conf = spawn_server("epicsrs", prefix, a.pvs, a.puts)
+            server, conf = spawn_server("repics", prefix, a.pvs, a.puts)
             env = client_env(conf)
             try:
                 for lib in a.libs.split(","):
@@ -547,7 +547,7 @@ def main() -> None:
         for sp in spinners:
             sp.kill()
 
-    table("client (against an epicsrs thread SharedPV server)", clients, fmt)
+    table("client (against an repics thread SharedPV server)", clients, fmt)
     table(f"server (measured by the {PROBE_CLIENT} thread client)", servers, fmt_server)
     print(f"\nmedian / p99 latency; {a.pvs} PVs; {a.reads} reads; array {WF_LEN} doubles; storm {a.puts} puts")
     print(clock)

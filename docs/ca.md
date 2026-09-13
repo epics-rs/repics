@@ -1,10 +1,10 @@
-# epicsrs.ca
+# repics.ca
 
 Blocking Channel Access client functions. The asyncio versions with the same
 signatures are in [aio.md](aio.md).
 
 ```python
-from epicsrs.ca import caget, caput, camonitor, cainfo, connect
+from repics.ca import caget, caput, camonitor, cainfo, connect
 ```
 
 Every function takes `pv` as one name (`str`) or a sequence of names. With a
@@ -146,7 +146,7 @@ did not carry is `None`.
 ### Example
 
 ```python
-from epicsrs.ca import caget, caput, DBR_CHAR_STR, DBR_ENUM_STR
+from repics.ca import caget, caput, DBR_CHAR_STR, DBR_ENUM_STR
 
 v = caget("demo:ai")            # form="time" by default
 print(repr(v))
@@ -221,8 +221,8 @@ Any other `datatype` raises `TypeError`.
 ## Errors
 
 ```python
-from epicsrs import CaTimeout
-from epicsrs.ca import caget, caput, connect, cainfo, CaNothing, ECA_TIMEOUT
+from repics import CaTimeout
+from repics.ca import caget, caput, connect, cainfo, CaNothing, ECA_TIMEOUT
 
 r = caget("demo:missing", timeout=0.5, throw=False)
 print(repr(r), bool(r), r.ok, r.errorcode == ECA_TIMEOUT, str(r))
@@ -258,7 +258,7 @@ before anything is sent; a read without read access, with
 ## Channel information
 
 ```python
-from epicsrs.ca import cainfo, get_channel_infos, caget
+from repics.ca import cainfo, get_channel_infos, caget
 
 print(cainfo("demo:ai"))
 i = cainfo("demo:missing", wait=False)
@@ -288,7 +288,7 @@ connected, `2` connected, `3` closed.
 
 ```python
 import time
-from epicsrs.ca import camonitor, caput, DBE_VALUE, DBE_ALARM
+from repics.ca import camonitor, caput, DBE_VALUE, DBE_ALARM
 
 seen = []
 sub = camonitor("demo:cnt", lambda v: seen.append(int(v)))
@@ -335,7 +335,7 @@ shows the initial value (42) first, then the two puts.
 
 ## Constants
 
-All of these are exported from `epicsrs`, `epicsrs.ca` and `epicsrs.aio`.
+All of these are exported from `repics`, `repics.ca` and `repics.aio`.
 
 | Name | Value |
 | --- | --- |
@@ -375,7 +375,7 @@ tuple the front ends hand to the extension), `errorcode(exc)`, and
 ## The extension classes
 
 The front ends above are written over these classes from
-`epicsrs._epicsrs`, re-exported from `epicsrs`. They are usable directly
+`repics._repics`, re-exported from `repics`. They are usable directly
 when you need a second client, a channel outside the shared cache, or
 pull-style delivery. Every blocking method here has an `_async`
 counterpart returning an awaitable.
@@ -388,7 +388,7 @@ CaContext()
 
 A CA client: search engine, virtual circuits and their channels.
 Configuration comes from the `EPICS_CA_*` environment at construction.
-`epicsrs.context()` returns the shared instance the front ends use.
+`repics.context()` returns the shared instance the front ends use.
 
 | Method | Meaning |
 | --- | --- |
@@ -453,10 +453,10 @@ and `write`), `"type_changed"` (with `dbr`, the new native type) or
 ### Example
 
 ```python
-from epicsrs import context, CaContext, CaDisconnected
-from epicsrs.ca import DBR_DOUBLE, DBR_STRING, form_offset
+from repics import context, CaContext, CaDisconnected
+from repics.ca import DBR_DOUBLE, DBR_STRING, form_offset
 
-ctx = context()                       # the CaContext behind epicsrs.ca / aio / pv
+ctx = context()                       # the CaContext behind repics.ca / aio / pv
 print(type(ctx).__name__, ctx.connection_count())
 ch = ctx.channel("demo:ai")
 ch.wait_connected(timeout=5.0)

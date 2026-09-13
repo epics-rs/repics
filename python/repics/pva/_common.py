@@ -7,11 +7,11 @@ import os
 from functools import partial
 from typing import Any, Callable
 
-from .._epicsrs import PvaDisconnected, PvaError, PvaRemoteError, PvaTimeout, Value
+from .._repics import PvaDisconnected, PvaError, PvaRemoteError, PvaTimeout, Value
 from .._value import Augmented
 from .nt import ClientUnwrapper, buildNT
 
-log = logging.getLogger("epicsrs.pva")
+log = logging.getLogger("repics.pva")
 
 Disconnected = PvaDisconnected
 RemoteError = PvaRemoteError

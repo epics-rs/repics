@@ -1,11 +1,11 @@
-# epicsrs
+# repics
 
 EPICS Channel Access and pvAccess for Python, built on
 [epics-rs](https://github.com/epics-rs/epics-rs). No libca, no libpvxs: the
 protocol stacks are the Rust crates, compiled into one extension module.
 
 ```python
-from epicsrs import ca
+from repics import ca
 
 ca.caput("SIM:ao", 2.5)
 v = ca.caget("SIM:ai", form="ctrl")
@@ -16,7 +16,7 @@ with ca.camonitor("SIM:cnt", print):
 ```
 
 ```python
-from epicsrs import aio
+from repics import aio
 
 async def main():
     v = await aio.caget(["SIM:ai", "SIM:long"])
@@ -51,7 +51,7 @@ libca `ECA_*` status. `cainfo` returns a `CAInfo`.
   while the callback ran collapse into the latest and `dropped_callbacks`
   counts them. `notify_disconnect=True` delivers a `CaNothing` with
   `ECA_DISCONN` on disconnect; the monitor resumes on reconnection.
-* `epicsrs.pv.PV` is a pyepics-shaped object (`get`, `put`, `add_callback`,
+* `repics.pv.PV` is a pyepics-shaped object (`get`, `put`, `add_callback`,
   `auto_monitor`, `char_value`, `units`, ...) over one subscription; it
   raises on failure like the rest of the package.
 
@@ -61,8 +61,8 @@ The API follows [p4p](https://github.com/epics-base/p4p): `Context`,
 `Value`/`Type`, the `nt` wrappers, and `SharedPV`/`StaticProvider`/`Server`.
 
 ```python
-from epicsrs.pva import Context
-from epicsrs.pva.nt import NTScalar, NTURI
+from repics.pva import Context
+from repics.pva.nt import NTScalar, NTURI
 
 with Context("pva") as ctxt:
     v = ctxt.get("SIM:ai")            # augmented, as for CA
@@ -73,7 +73,7 @@ with Context("pva") as ctxt:
 ```
 
 ```python
-from epicsrs.pva.server import SharedPV, Server
+from repics.pva.server import SharedPV, Server
 
 pv = SharedPV(nt=NTScalar("d"), initial=1.0)
 
@@ -85,7 +85,7 @@ def onput(pv, op):
 Server.forever(providers=[{"SIM:ao": pv}])
 ```
 
-`epicsrs.pva.asyncio.Context` and `epicsrs.pva.server.asyncio.SharedPV` are
+`repics.pva.asyncio.Context` and `repics.pva.server.asyncio.SharedPV` are
 the asyncio flavours; handlers there may be coroutines. Put and RPC handlers
 run on Python-owned threads (or the event loop), never on the network runtime,
 and a slow monitor consumer squashes updates in Rust instead of queueing
@@ -94,20 +94,20 @@ Python objects. NTNDArray reads are zero-copy views of the received buffer.
 ## Performance
 
 The extension owns one tokio runtime with one worker thread (override with
-`EPICSRS_WORKERS`); every blocking call releases the GIL and waits for its
+`REPICS_WORKERS`); every blocking call releases the GIL and waits for its
 future, every `aio` call returns a future that is already done when the
 answer is in hand. Metadata is attached to a value lazily, list operations
 run in Rust as one concurrent batch, and all monitors of a front end feed
 one bounded queue that is drained in batches, so a callback costs one queue
 pop rather than one thread wake-up.
 
-`bench/bench_ca.py` runs epicsrs, pyepics and aioca in separate processes
+`bench/bench_ca.py` runs repics, pyepics and aioca in separate processes
 against the same `softioc-rs`. On a Xeon Gold 6542Y, pinned to four cores
 with the SMT siblings kept busy so the cores hold their clock
 (`--pin 2,3,4,5 --hot`; unpinned, `schedutil` parks the ping-ponging
 threads at 800 MHz and every library halves):
 
-| | epicsrs | epicsrs.aio | pyepics | aioca |
+| | repics | repics.aio | pyepics | aioca |
 |---|---|---|---|---|
 | get, median / p99 | 35 / 42 us | 72 / 103 us | 85 / 107 us | 59 / 69 us |
 | get 10 000-double waveform | 166 / 183 us | 161 / 179 us | 182 / 269 us | 109 / 171 us |
@@ -121,11 +121,11 @@ Monitor rows are under a 20 000-put storm from a separate writer process;
 every client received 20 099–20 100 of the 20 100 events on the 100-PV row.
 
 `bench/bench_pva.py` does the same for pvAccess. Client rows run each
-library in its own process against one epicsrs thread `SharedPV` server;
+library in its own process against one repics thread `SharedPV` server;
 server rows run each server flavour in its own process, measured by the
 p4p thread client. Same machine, same pinning:
 
-| client | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
+| client | repics | repics.asyncio | p4p | p4p.asyncio |
 |---|---|---|---|---|
 | get, median / p99 | 47 / 54 us | 69 / 92 us | 99 / 131 us | 99 / 132 us |
 | get 10 000-double array | 90 / 101 us | 105 / 136 us | 122 / 184 us | 122 / 143 us |
@@ -135,7 +135,7 @@ p4p thread client. Same machine, same pinning:
 | monitor, 1 PV, CPU per callback | 30.6 us | 61.7 us | 34.1 us | 41.3 us |
 | monitor, 100 PVs, CPU per callback | 34.6 us | 71.3 us | 54.9 us | 59.3 us |
 
-| server | epicsrs | epicsrs.asyncio | p4p | p4p.asyncio |
+| server | repics | repics.asyncio | p4p | p4p.asyncio |
 |---|---|---|---|---|
 | get, median / p99 | 94 / 115 us | 99 / 128 us | 99 / 133 us | 94 / 116 us |
 | put wait=True, through the put handler | 147 / 170 us | 187 / 239 us | 153 / 189 us | 148 / 177 us |
@@ -143,17 +143,17 @@ p4p thread client. Same machine, same pinning:
 | post storm, 100 PVs: delivered of 20 100, server CPU per post | 18 390, 12.6 us | 19 571, 12.5 us | 20 100, 6.7 us | 20 098, 6.6 us |
 
 pvAccess has no fire-and-forget put: every put is a completed round trip,
-and with the default `get=True` the current value is read first. epicsrs
+and with the default `get=True` the current value is read first. repics
 and pvxs both do this as one two-phase put operation, the readback riding
 the put's own channel op, so the put rows are on par. The client monitor
-rows are under a storm from a separate epicsrs writer running four threads
+rows are under a storm from a separate repics writer running four threads
 of `put(wait=True)`, about 14 000 puts/s, and every client received
 19 857 or more of the 20 001 events, so the CPU column is the comparison.
 The server storm is one thread posting as fast as `post()` returns; the
-epicsrs server delivers about twice as many posts as pvxs and spends
+repics server delivers about twice as many posts as pvxs and spends
 about 13 us of CPU per post, delivery included, where pvxs spends about
 6 us and, on one PV, squashes away more than half of them. Medians of the
-blocking epicsrs client moved between 44 and 79 us on `get` across runs
+blocking repics client moved between 44 and 79 us on `get` across runs
 of the same command (thread placement inside the four cores); each table
 is one run.
 
@@ -164,7 +164,7 @@ Reference documentation: [docs/index.md](docs/index.md).
 ```sh
 pip install maturin
 maturin develop            # into the active environment
-pytest                     # needs `softioc-rs` on PATH or EPICSRS_SOFTIOC=<path>
+pytest                     # needs `softioc-rs` on PATH or REPICS_SOFTIOC=<path>
 ```
 
 `softioc-rs` is `cargo install epics-ca-rs --bin softioc-rs`.

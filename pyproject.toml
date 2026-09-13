@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "epicsrs"
+name = "repics"
 description = "EPICS Channel Access and pvAccess for Python, built on epics-rs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,11 +21,11 @@ classifiers = [
 test = ["pytest>=8"]
 
 [project.urls]
-Source = "https://github.com/epics-rs/epicsrs"
+Source = "https://github.com/epics-rs/repics"
 
 [tool.maturin]
 python-source = "python"
-module-name = "epicsrs._epicsrs"
+module-name = "repics._repics"
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
