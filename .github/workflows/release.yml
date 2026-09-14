@@ -1,0 +1,128 @@
+name: Release
+
+# A published GitHub Release builds wheels on every platform and, if they
+# all succeed, uploads them: a pre-release goes to TestPyPI, a full release
+# to PyPI, both via OIDC Trusted Publishing (no stored token). Uploading
+# nothing but wheels is deliberate — repics depends on ../epics-rs by path,
+# which a prebuilt wheel bakes in but an sdist could not rebuild.
+#
+# workflow_dispatch runs the same wheel matrix as a build-only dry run: the
+# publish jobs are gated to `release` events, so a manual run never uploads.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+env:
+  # Must match the epics-rs version Cargo.lock pins; the wheels bake this
+  # tree's compiled code in.
+  EPICS_RS_REF: v0.29.0
+
+jobs:
+  # The published version is Cargo.toml's, not the tag's. Refuse a release
+  # whose tag disagrees, so a forgotten version bump fails before upload
+  # (PyPI rejects a re-uploaded version).
+  check-version:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must equal the crate version
+        run: |
+          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml=$ver  tag=$tag"
+          test "$ver" = "$tag"
+
+  wheels:
+    name: wheel-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64
+            manylinux: "2_28"
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64
+          - name: windows-x86_64
+            os: windows-latest
+            target: x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repics
+      - uses: actions/checkout@v4
+        with:
+          repository: epics-rs/epics-rs
+          ref: ${{ env.EPICS_RS_REF }}
+          path: epics-rs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Linux wheels must be manylinux for PyPI; the ../epics-rs path
+      # dependency resolves because maturin-action mounts the whole
+      # workspace into the build container.
+      - name: Build wheel (manylinux)
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: repics
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+      - name: Build wheel (native)
+        if: runner.os != 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: repics
+          target: ${{ matrix.target }}
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: repics/dist/*.whl
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [check-version, wheels]
+    if: github.event_name == 'release' && github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [check-version, wheels]
+    if: github.event_name == 'release' && github.event.release.prerelease == true
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
