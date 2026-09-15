@@ -194,6 +194,6 @@ pytest                     # needs `softioc-rs` on PATH or REPICS_SOFTIOC=<path>
 
 ## Status
 
-Channel Access client, blocking and asyncio. pvAccess client and server,
-blocking and asyncio; tested against p4p on both sides of the wire
-(`pytest tests/pva` needs `p4p` installed).
+Channel Access client and server, blocking and asyncio. pvAccess client
+and server, blocking and asyncio; tested against p4p on both sides of
+the wire (`pytest tests/pva` needs `p4p` installed).
