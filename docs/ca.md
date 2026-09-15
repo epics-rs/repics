@@ -1,7 +1,7 @@
 # repics.ca
 
 Blocking Channel Access client functions. The asyncio versions with the same
-signatures are in [aio.md](aio.md).
+signatures are in [ca-asyncio.md](ca-asyncio.md).
 
 ```python
 from repics.ca import caget, caput, camonitor, cainfo, connect
@@ -335,7 +335,7 @@ shows the initial value (42) first, then the two puts.
 
 ## Constants
 
-All of these are exported from `repics`, `repics.ca` and `repics.aio`.
+All of these are exported from `repics`, `repics.ca` and `repics.ca.asyncio`.
 
 | Name | Value |
 | --- | --- |
@@ -456,7 +456,7 @@ and `write`), `"type_changed"` (with `dbr`, the new native type) or
 from repics import context, CaContext, CaDisconnected
 from repics.ca import DBR_DOUBLE, DBR_STRING, form_offset
 
-ctx = context()                       # the CaContext behind repics.ca / aio / pv
+ctx = context()                       # the CaContext behind repics.ca / ca.asyncio / pv
 print(type(ctx).__name__, ctx.connection_count())
 ch = ctx.channel("demo:ai")
 ch.wait_connected(timeout=5.0)

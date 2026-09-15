@@ -7,7 +7,7 @@ import pytest
 
 SCRIPT = """
 import asyncio, sys
-from repics.aio import caget, caput, camonitor
+from repics.ca.asyncio import caget, caput, camonitor
 pv = sys.argv[1]
 async def main():
     await caput(pv, 3, wait=True)

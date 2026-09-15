@@ -6,7 +6,8 @@ import numpy
 import pytest
 
 import repics
-from repics import aio, ca
+from repics import ca
+from repics.ca import asyncio as aio
 
 
 def test_caget_double_time_form(ioc):

@@ -3,7 +3,7 @@
 Front ends:
 
 * ``repics.ca``  — blocking ``caget`` / ``caput`` / ``camonitor`` / ``cainfo`` / ``connect``
-* ``repics.aio`` — the same, as coroutines for asyncio
+* ``repics.ca.asyncio`` — the same, as coroutines for asyncio
 * ``repics.pv``  — a pyepics-shaped ``PV`` object over the blocking front end
 * ``repics.pva`` — pvAccess client (``Context``), ``pva.asyncio``, ``pva.nt``, ``pva.server``
 
@@ -11,7 +11,7 @@ Both return augmented values (see ``repics.Augmented``) and share one
 default context built from the ``EPICS_CA_*`` environment on first use.
 """
 
-from . import aio, ca, pv, pva
+from . import ca, pv, pva
 from ._context import ChannelStatus, context, get_channel_infos, purge_channel_caches
 from ._dbr import *  # noqa: F401,F403 - DBR_* / DBE_* / ECA_* are the public vocabulary
 from ._dbr import __all__ as _dbr_all
@@ -46,7 +46,6 @@ from ._value import (
 
 __all__ = [
     "__version__",
-    "aio",
     "ca",
     "pv",
     "pva",

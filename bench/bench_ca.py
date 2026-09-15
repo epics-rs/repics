@@ -243,7 +243,7 @@ def bench_repics_aio(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -
 
     import numpy
 
-    from repics import aio
+    from repics.ca import asyncio as aio
 
     async def atimed(fn, reps):
         out = []
@@ -369,7 +369,7 @@ def bench_aioca(pvs: list[str], wf: str, reads: int, env: dict[str, str]) -> dic
 
 LIBS = {
     "repics": bench_repics,
-    "repics.aio": bench_repics_aio,
+    "repics.ca.asyncio": bench_repics_aio,
     "pyepics": bench_pyepics,
     "aioca": bench_aioca,
 }

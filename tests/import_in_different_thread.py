@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 
-from repics.aio import caget
+from repics.ca.asyncio import caget
 
 if __name__ == "__main__":
 

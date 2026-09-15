@@ -1,5 +1,5 @@
 """aioca's test suite (DiamondLightSource/aioca, tests/test_aioca.py) run
-against ``repics.aio``, as a functional check of the asyncio front end.
+against ``repics.ca.asyncio``, as a functional check of the asyncio front end.
 
 Names follow this package (``form=`` for ``format=``, ``CaNothing``,
 ``CaTimeout``), the IOC is ``softioc-rs`` on ``tests/ioc/aioca.db`` and is
@@ -27,8 +27,8 @@ from pathlib import Path
 import pytest
 
 import repics
-from repics import aio
-from repics.aio import (
+from repics.ca import asyncio as aio
+from repics.ca.asyncio import (
     CAInfo,
     CaNothing,
     caget,

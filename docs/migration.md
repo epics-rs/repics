@@ -46,7 +46,7 @@ print(p.get(), p.units, p.value, epics.get_pv("demo:ai") is p)
 
 | aioca | repics |
 | --- | --- |
-| `from aioca import caget, caput, camonitor, cainfo, connect` | `from repics.aio import caget, caput, camonitor, cainfo, connect` |
+| `from aioca import caget, caput, camonitor, cainfo, connect` | `from repics.ca.asyncio import caget, caput, camonitor, cainfo, connect` |
 | `from aioca import CANothing, CAInfo` | `from repics import CaNothing, CAInfo` |
 | `FORMAT_RAW`, `FORMAT_TIME`, `FORMAT_CTRL` | the strings `'raw'`, `'time'`, `'ctrl'` in `form=` |
 | `DBR_*`, `DBE_*`, `ECA_*` | the same names, exported from `repics` |
@@ -60,7 +60,7 @@ The error hierarchy is `repics.CaError` with `CaTimeout` and
 
 ```python
 import asyncio
-from repics.aio import caget, caput, camonitor   # aioca: from aioca import ...
+from repics.ca.asyncio import caget, caput, camonitor   # aioca: from aioca import ...
 async def main():
     await caput("demo:long", 3, wait=True)
     v = await caget("demo:long")
@@ -86,7 +86,7 @@ assertion `left != right` failed: The Python interpreter is not initialized and 
 
 The exit status stayed 0. The runtime worker touched a Python object
 after the interpreter had finalized; the same sequence without the
-`camonitor` (the `repics.aio` example in [aio.md](aio.md)) did not show
+`camonitor` (the `repics.ca.asyncio` example in [ca-asyncio.md](ca-asyncio.md)) did not show
 it in 4 runs.
 
 ## From p4p
