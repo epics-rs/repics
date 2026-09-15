@@ -30,3 +30,6 @@ features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Duplicate test basenames (tests/ca/test_server.py, tests/pva/test_server.py)
+# collide under the default prepend import mode; importlib keys by full path.
+addopts = "--import-mode=importlib"
