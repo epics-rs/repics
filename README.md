@@ -16,11 +16,11 @@ with ca.camonitor("SIM:cnt", print):
 ```
 
 ```python
-from repics import aio
+from repics.ca.asyncio import caget, camonitor
 
 async def main():
-    v = await aio.caget(["SIM:ai", "SIM:long"])
-    sub = await aio.camonitor("SIM:cnt", print)
+    v = await caget(["SIM:ai", "SIM:long"])
+    sub = await camonitor("SIM:cnt", print)
 ```
 
 Every read returns an augmented value: a `float`/`int`/`str`/`numpy.ndarray`
@@ -46,7 +46,7 @@ libca `ECA_*` status. `cainfo` returns a `CAInfo`.
 * `camonitor(pv, callback, ...)` returns a `Subscription` at once and
   connects in the background; `connect_timeout` reports a `CaNothing` with
   `ECA_TIMEOUT` if it passes, and the monitor keeps waiting. Callbacks run
-  on one dispatcher thread (`ca`) or one task per event loop (`aio`), in
+  on one dispatcher thread (`ca`) or one task per event loop (`ca.asyncio`), in
   arrival order. With `all_updates=False` (default) updates that queued
   while the callback ran collapse into the latest and `dropped_callbacks`
   counts them. `notify_disconnect=True` delivers a `CaNothing` with
@@ -95,7 +95,7 @@ Python objects. NTNDArray reads are zero-copy views of the received buffer.
 
 The extension owns one tokio runtime with one worker thread (override with
 `REPICS_WORKERS`); every blocking call releases the GIL and waits for its
-future, every `aio` call returns a future that is already done when the
+future, every `ca.asyncio` call returns a future that is already done when the
 answer is in hand. Metadata is attached to a value lazily, list operations
 run in Rust as one concurrent batch, and all monitors of a front end feed
 one bounded queue that is drained in batches, so a callback costs one queue
@@ -107,7 +107,7 @@ with the SMT siblings kept busy so the cores hold their clock
 (`--pin 2,3,4,5 --hot`; unpinned, `schedutil` parks the ping-ponging
 threads at 800 MHz and every library halves):
 
-| | repics | repics.aio | pyepics | aioca |
+| | repics | repics.ca.asyncio | pyepics | aioca |
 |---|---|---|---|---|
 | get, median / p99 | 35 / 42 us | 72 / 103 us | 85 / 107 us | 59 / 69 us |
 | get 10 000-double waveform | 166 / 183 us | 161 / 179 us | 182 / 269 us | 109 / 171 us |

@@ -1,11 +1,11 @@
-# repics.aio
+# repics.ca.asyncio
 
 The `repics.ca` functions as coroutines for asyncio. Signatures, arguments,
 return values, errors and constants are the same as in [ca.md](ca.md); only
 the differences are listed here.
 
 ```python
-from repics.aio import caget, caput, camonitor, cainfo, connect
+from repics.ca.asyncio import caget, caput, camonitor, cainfo, connect
 ```
 
 | Name | Difference from `repics.ca` |
@@ -27,13 +27,13 @@ counts the rest. Callbacks run as a task on the loop that called
 `dropped_callbacks`, context manager and `repr()` as the blocking flavour.
 
 The same shared `CaContext` and channel cache serve `repics.ca`,
-`repics.aio` and `repics.pv`, so mixing them in one process is fine.
+`repics.ca.asyncio` and `repics.pv`, so mixing them in one process is fine.
 
 ## Example
 
 ```python
 import asyncio
-from repics.aio import caget, caput, camonitor, cainfo, connect, CaNothing
+from repics.ca.asyncio import caget, caput, camonitor, cainfo, connect, CaNothing
 
 async def main():
     v = await caget("demo:ai")

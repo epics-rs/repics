@@ -13,7 +13,7 @@ and server, and the normative-type helpers.
 | Page | Covers |
 | --- | --- |
 | [ca.md](ca.md) | `repics.ca`: blocking `caget`, `caput`, `camonitor`, `cainfo`, `connect`; the DBR, DBE and ECA constants; the low-level `CaContext` and `CaChannel` extension classes |
-| [aio.md](aio.md) | `repics.aio`: the same functions as coroutines for asyncio |
+| [ca-asyncio.md](ca-asyncio.md) | `repics.ca.asyncio`: the same functions as coroutines for asyncio |
 | [pv.md](pv.md) | `repics.pv`: the `PV` class and `get_pv` |
 | [pva-client.md](pva-client.md) | `repics.pva.Context` and `repics.pva.asyncio.Context`: get, put, rpc, info, connect, monitor |
 | [pva-server.md](pva-server.md) | `repics.pva.server`: `Server`, `StaticProvider`, `SharedPV` (thread and asyncio flavours), `Handler`, `ServerOperation` |
@@ -28,7 +28,7 @@ and server, and the normative-type helpers.
 | --- | --- |
 | `repics` | The package. Re-exports the extension classes and exceptions, `context()`, `get_channel_infos()`, `purge_channel_caches()`, and every name from the DBR constants module |
 | `repics.ca` | Blocking CA client functions |
-| `repics.aio` | asyncio CA client functions |
+| `repics.ca.asyncio` | asyncio CA client functions |
 | `repics.pv` | `PV` and `get_pv` |
 | `repics.pva` | Thread-flavour PVA client `Context`, `Type`, `Value`, the PVA exceptions, and the `nt` submodule |
 | `repics.pva.asyncio` | asyncio-flavour PVA client `Context` |
@@ -40,7 +40,7 @@ and server, and the normative-type helpers.
 Names exported from the top-level package:
 
 ```
-aio, ca, pv, pva, context, get_channel_infos, purge_channel_caches,
+ca, pv, pva, context, get_channel_infos, purge_channel_caches,
 ChannelStatus, CaChannel, CaContext, CaDisconnected, CaError, CaEvents,
 CaNothing, CaSubscription, CaTimeout, CAInfo, ChannelInfo, ConnectionEvent,
 PvaDisconnected, PvaError, PvaRemoteError, PvaTimeout, Snapshot,
@@ -58,7 +58,7 @@ values below 1 are raised to 1; see [config.md](config.md)).
 
 Blocking calls (`repics.ca`, `repics.pv`, the thread-flavour PVA
 `Context`, and every non-`_async` method of the extension classes) release
-the GIL while they wait. Coroutine calls (`repics.aio`, `repics.pva.asyncio`)
+the GIL while they wait. Coroutine calls (`repics.ca.asyncio`, `repics.pva.asyncio`)
 are futures bridged from the runtime into the calling asyncio loop.
 
 No Python callback ever runs on a runtime worker. Each front end drains a
@@ -67,7 +67,7 @@ queue on a thread or task of its own:
 | Front end | Callback context |
 | --- | --- |
 | `repics.ca.camonitor`, `repics.pv` | one daemon thread named `repics camonitor` |
-| `repics.aio.camonitor` | one task per asyncio loop |
+| `repics.ca.asyncio.camonitor` | one task per asyncio loop |
 | `repics.pva.Context.monitor` | one daemon thread named `repics pvmonitor`, or the `queue` you pass |
 | `repics.pva.asyncio.Context.monitor` | one task per asyncio loop |
 | thread-flavour `SharedPV` handlers | a daemon thread named `repics.pva.server` (or the `queue` you pass) |

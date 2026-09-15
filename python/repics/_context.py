@@ -1,6 +1,6 @@
 """The process-wide default context and its channel cache.
 
-Both front ends (``repics.ca`` and ``repics.aio``) share one ``CaContext``
+Both front ends (``repics.ca`` and ``repics.ca.asyncio``) share one ``CaContext``
 because both run on the one runtime the extension owns. Channels are cached
 by name so a repeated ``caget`` does not search again; a cached channel is
 never closed, matching libca's channel lifetime under pyepics and aioca.

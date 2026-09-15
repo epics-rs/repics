@@ -33,7 +33,7 @@ None 1
 ## CA client
 
 Read by `epics-ca-rs` when the CA context is created (the first
-`repics.ca`, `repics.aio`, `repics.pv` call, or `CaContext()`), unless
+`repics.ca`, `repics.ca.asyncio`, `repics.pv` call, or `CaContext()`), unless
 the "Read" column says otherwise. Every front end shares one context, so a
 change after the first call has no effect on it.
 
@@ -62,7 +62,7 @@ extension does not run; the same holds for every `EPICS_CAS_*` variable,
 `EPICS_RS_HAG_DNS_REFRESH_SECS` and `EPICS_CA_RS_CHAOS`. `EPICS_CLI_TIMEOUT`
 belongs to the crate's command-line tools.
 
-The CA client (`repics.ca`, `repics.aio`, `repics.pv`) has no
+The CA client (`repics.ca`, `repics.ca.asyncio`, `repics.pv`) has no
 configuration argument; the environment is the only way to set it.
 
 ## PVA client
