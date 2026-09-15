@@ -15,7 +15,7 @@ env:
   # repics depends on ../epics-rs by path; CI checks epics-rs out at this
   # ref beside it and builds softioc-rs from that tree. Bump in lockstep
   # with the epics-rs version Cargo.lock pins.
-  EPICS_RS_REF: v0.29.0
+  EPICS_RS_REF: v0.29.2
 
 jobs:
   # Strict lint gate on the canonical target only, as epics-rs does:
