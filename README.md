@@ -55,6 +55,29 @@ libca `ECA_*` status. `cainfo` returns a `CAInfo`.
   `auto_monitor`, `char_value`, `units`, ...) over one subscription; it
   raises on failure like the rest of the package.
 
+A CA server hosts bare value channels — `caget`, `caput` and `camonitor`
+reach them, but there is no record, no RPC and no per-channel connect edge,
+so the only handler is `put`:
+
+```python
+from repics.ca.server import SharedPV, Server
+
+pv = SharedPV(initial=1.0)
+
+@pv.put
+def onput(pv, op):
+    pv.post(op.value())      # accept: publish to monitors
+    op.done()                # or op.done(error="...") to reject
+
+Server.forever(providers=[{"X:val": pv}])
+```
+
+A `SharedPV` with no handler refuses every put. `post()` fans a new value out
+to monitors; values are plain scalars, strings, lists or 1-D numpy arrays.
+`repics.ca.server.asyncio.SharedPV` is the asyncio flavour, whose handler may
+be a coroutine. Handlers run on Python-owned threads (or the event loop),
+never on the network runtime.
+
 ## pvAccess
 
 The API follows [p4p](https://github.com/epics-base/p4p): `Context`,

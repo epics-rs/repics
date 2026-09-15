@@ -6,6 +6,7 @@
 //! pyepics/aioca/p4p-shaped front ends) lives in the pure-Python package.
 
 mod ca;
+mod ca_server;
 mod error;
 mod hub;
 mod pva;
@@ -47,6 +48,11 @@ fn _repics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ca::Snapshot>()?;
     m.add_class::<ca::ChannelInfo>()?;
     m.add_class::<hub::MonitorHub>()?;
+    m.add_class::<ca_server::CaServerOperation>()?;
+    m.add_class::<ca_server::CaWorkQueue>()?;
+    m.add_class::<ca_server::CaSharedPV>()?;
+    m.add_class::<ca_server::CaProvider>()?;
+    m.add_class::<ca_server::CaServer>()?;
     m.add("PvaError", py.get_type::<pva::error::PvaError>())?;
     m.add("PvaTimeout", py.get_type::<pva::error::PvaTimeout>())?;
     m.add(

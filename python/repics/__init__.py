@@ -4,6 +4,7 @@ Front ends:
 
 * ``repics.ca``  — blocking ``caget`` / ``caput`` / ``camonitor`` / ``cainfo`` / ``connect``
 * ``repics.ca.asyncio`` — the same, as coroutines for asyncio
+* ``repics.ca.server`` — a CA server (``SharedPV`` / ``Server``), ``ca.server.asyncio``
 * ``repics.pv``  — a pyepics-shaped ``PV`` object over the blocking front end
 * ``repics.pva`` — pvAccess client (``Context``), ``pva.asyncio``, ``pva.nt``, ``pva.server``
 
