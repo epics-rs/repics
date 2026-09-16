@@ -37,7 +37,7 @@ from ._dbr import (
     DBR_ENUM_STR,
     ECA_TIMEOUT,
 )
-from ._repics import MonitorHub, Snapshot, _wait_idle
+from ._repics import Snapshot, _wait_idle
 from ._value import CaNothing, augment
 
 MONITOR_DATATYPES = (None, str, DBR_ENUM_STR, DBR_CHAR_STR, DBR_CHAR_BYTES, DBR_CHAR_UNICODE)
