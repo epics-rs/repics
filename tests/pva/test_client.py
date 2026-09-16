@@ -10,7 +10,7 @@ import pytest
 
 from repics import PvaError, PvaRemoteError, PvaTimeout
 from repics.pva import Context, Disconnected, Value
-from repics.pva.nt import NTScalar, NTURI
+from repics.pva.nt import NTURI
 
 IMAGE_SHAPE = (1000, 1000)
 

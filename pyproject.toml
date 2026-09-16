@@ -33,3 +33,14 @@ testpaths = ["tests"]
 # Duplicate test basenames (tests/ca/test_server.py, tests/pva/test_server.py)
 # collide under the default prepend import mode; importlib keys by full path.
 addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# A correctness gate, not a style rewrite: pyflakes (F), the E4/E7/E9 pycodestyle
+# subset, and blind-except (BLE). pep8-naming (N) and flake8-builtins (A) are off
+# on purpose — the p4p-shaped API (isOpen, getID, the Value locals V/W, and the
+# format=/type=/id= keyword arguments) is deliberate and those rules would fight
+# it. E501 line length is off too; some signatures stay long.
+select = ["E4", "E7", "E9", "F", "BLE"]
