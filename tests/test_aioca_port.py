@@ -340,22 +340,27 @@ async def test_long_monitor_all_updates(pv) -> None:
 
 @async_test
 async def test_sync_monitor_fast_updates(pv) -> None:
-    successes = 0
-    for _ in range(10):
-        values: list[int] = []
-        await caput(pv.SEQOUT, 0, wait=True)
-        await connect(pv.SEQ)
-        m = camonitor(pv.SEQOUT, values.append, connect_timeout=(time.time() + 0.5,), all_updates=True)
-        await caput(pv.SEQ, 1, wait=True)
-        assert await caget(pv.SEQOUT) == 8
-        await asyncio.sleep(0.1)
-        assert values[-1] == 8
-        assert m.dropped_callbacks == 0
-        # The server may coalesce the burst; count the runs where it did not
-        if values == [0, 1, 2, 3, 4, 5, 6, 7, 8]:
-            successes += 1
-        m.close()
-    assert successes > 3
+    # aioca #68: an all_updates monitor with a sync callback must deliver every
+    # update in order, not collapse onto the first (or only the latest). aioca
+    # poked a zero-delay seq record and counted how many of ten synchronous
+    # bursts arrived whole, asserting more than three did -- but the CA server
+    # is free to coalesce a burst it cannot ship in time, so that count is
+    # load-dependent and flaked on slow CI runners. Pace the writes instead:
+    # wait for each monitor event before sending the next, so coalescing cannot
+    # occur and full in-order delivery is deterministic. A callback stuck on the
+    # first update (the #68 bug) makes poll_length time out here.
+    values: list[int] = []
+    await caput(pv.SEQOUT, 0, wait=True)
+    m = camonitor(
+        pv.SEQOUT, values.append, connect_timeout=(time.time() + 0.5,), all_updates=True
+    )
+    await poll_length(values)  # the connect-time value, 0
+    for i in range(1, 9):
+        await caput(pv.SEQOUT, i, wait=True)
+        await poll_length(values, i)  # this update must arrive before the next
+    m.close()
+    assert values == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert m.dropped_callbacks == 0
 
 
 @async_test
