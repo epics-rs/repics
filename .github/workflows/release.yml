@@ -17,7 +17,7 @@ on:
 env:
   # Must match the epics-rs version Cargo.lock pins; the wheels bake this
   # tree's compiled code in.
-  EPICS_RS_REF: v0.29.2
+  EPICS_RS_REF: v0.30.0
 
 jobs:
   # The published version is Cargo.toml's, not the tag's. Refuse a release

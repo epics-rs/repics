@@ -572,7 +572,7 @@ checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
 
 [[package]]
 name = "epics-base-rs"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "epics-ca-rs"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "epics-libcom-rs"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "chrono",
  "epics-rtems-boot",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "epics-macros-rs"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "epics-pva-rs"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "epics-rtems-boot"
-version = "0.29.2"
+version = "0.30.0"
 dependencies = [
  "cc",
  "libc",
