@@ -8,25 +8,24 @@
 //! path-addressable and come back as detached copies.
 //!
 //! Scalar arrays cross the boundary without copying: the numpy array is
-//! built over the `Arc<[T]>` the wire decoder produced, with a capsule
-//! holding a clone of that `Arc` as the array's base object.
+//! built over the `PvArray<T>` the wire decoder produced, with a capsule
+//! holding a clone of that array as the numpy array's base object
+//! (`crate::value::shared_to_numpy`, shared with the CA path).
 
 use std::collections::BTreeSet;
-use std::ffi::CString;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use epics_pva_rs::proto::BitSet;
 use epics_pva_rs::pvdata::encode::default_value_for;
 use epics_pva_rs::pvdata::render_value;
 use epics_pva_rs::pvdata::{
-    FieldDesc, PvField, ScalarType, ScalarValue, TypedScalarArray, UnionItem, VariantValue,
+    FieldDesc, PvArray, PvField, ScalarType, ScalarValue, TypedScalarArray, UnionItem, VariantValue,
 };
-use numpy::ndarray::ArrayView1;
-use numpy::{Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{Element, PyReadonlyArray1};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyAttributeError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyCapsule, PyDict, PyFloat, PyInt, PyList, PySet, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PySet, PyString, PyTuple};
 
 // ---------------------------------------------------------------------------
 // Descriptor helpers
@@ -953,21 +952,12 @@ pub fn scalar_to_py(py: Python<'_>, v: &ScalarValue) -> PyResult<Py<PyAny>> {
     }
 }
 
-/// A read-only numpy array over `data`, whose base object keeps the
-/// `Arc` alive. No element is copied.
+/// A read-only numpy array over `data`, no element copied.
 fn arc_to_numpy<T: Element + Copy + Send + Sync + 'static>(
     py: Python<'_>,
-    data: &Arc<[T]>,
+    data: &PvArray<T>,
 ) -> PyResult<Py<PyAny>> {
-    let keep = data.clone();
-    let capsule = PyCapsule::new(py, keep, Some(CString::new("repics.pva.array").unwrap()))?;
-    let view = ArrayView1::from(&data[..]);
-    // SAFETY: the capsule owns a clone of the Arc, so the buffer outlives
-    // the numpy array; an `Arc<[T]>` is never reallocated.
-    let arr = unsafe { PyArray1::<T>::borrow_from_array(&view, capsule.into_any()) };
-    let ro = arr.readwrite().make_nonwriteable();
-    let out: Bound<'_, PyAny> = (*ro).clone().into_any();
-    Ok(out.unbind())
+    crate::value::shared_to_numpy(py, data)
 }
 
 pub fn typed_array_to_py(py: Python<'_>, arr: &TypedScalarArray) -> PyResult<Py<PyAny>> {
@@ -1237,13 +1227,13 @@ fn numpy_1d<'py, T: Element>(
     Ok(arr.extract::<PyReadonlyArray1<T>>()?)
 }
 
-fn to_arc<T: Element + Copy>(
+fn to_arc<T: Element + Copy + Send + Sync>(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     dtype: &str,
-) -> PyResult<Arc<[T]>> {
+) -> PyResult<PvArray<T>> {
     let a = numpy_1d::<T>(py, obj, dtype)?;
-    Ok(Arc::from(a.as_slice()?.to_vec().into_boxed_slice()))
+    Ok(a.as_slice()?.to_vec().into())
 }
 
 pub fn py_to_array(
@@ -1272,7 +1262,7 @@ pub fn py_to_array(
                     .map(|it| Ok(it?.str()?.to_cow()?.as_ref().into()))
                     .collect::<PyResult<Vec<_>>>()?
             };
-            TypedScalarArray::String(Arc::from(items.into_boxed_slice()))
+            TypedScalarArray::String(items.into())
         }
     })
 }
