@@ -127,7 +127,7 @@ Python type with the metadata attached:
 | `AugmentedFloat` | `float` | `DBR_FLOAT`, `DBR_DOUBLE` scalars |
 | `AugmentedInt` | `int` | `DBR_SHORT`, `DBR_LONG`, `DBR_CHAR`, `DBR_ENUM` scalars |
 | `AugmentedStr` | `str` | strings, enum labels, `DBR_CHAR_STR` |
-| `AugmentedArray` | `numpy.ndarray` | arrays |
+| `AugmentedArray` | `numpy.ndarray` | arrays: a read-only view over the received buffer (no copy). Copy it before modifying |
 | `AugmentedList` | `list` | string arrays |
 | `AugmentedBytes` | `bytes` | `DBR_CHAR_BYTES` |
 

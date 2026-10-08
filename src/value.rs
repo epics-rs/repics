@@ -11,25 +11,46 @@
 //! variant; a list is a string array if every element is a `str`, else a
 //! `float64` array.
 
-use epics_base_rs::types::{EpicsValue, PvString, SharedArray};
-use numpy::{PyArray1, PyReadonlyArray1, PyUntypedArrayMethods};
+use std::ffi::CString;
+
+use epics_base_rs::types::{EpicsValue, PvString};
+use numpy::ndarray::ArrayView1;
+use numpy::{Element, PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyCapsule, PyFloat, PyInt, PyList, PyString};
 
 pub fn pv_string_to_py(py: Python<'_>, s: &PvString) -> PyResult<Py<PyAny>> {
     s.as_str_lossy().into_py_any(py)
 }
 
-/// Convert an `EpicsValue` into a Python object. Arrays are copied once
-/// out of the `SharedArray` the client decoded into, so the numpy array
-/// stays writable as it was when the variants carried a `Vec`.
+/// A read-only numpy array over `data`'s elements, whose base object is a
+/// capsule holding a clone of `data` so the shared buffer outlives the
+/// array. No element is copied; this is how every array, CA or PVA,
+/// crosses into Python.
+pub(crate) fn shared_to_numpy<T, A>(py: Python<'_>, data: &A) -> PyResult<Py<PyAny>>
+where
+    T: Element + Copy,
+    A: AsRef<[T]> + Clone + Send + 'static,
+{
+    let keep = data.clone();
+    let capsule = PyCapsule::new(py, keep, Some(CString::new("repics.array").unwrap()))?;
+    let view = ArrayView1::from(data.as_ref());
+    // SAFETY: `data` and its clone in the capsule read one buffer behind an
+    // `Arc` that is never reallocated or written while shared, so the
+    // elements outlive the numpy array and never move under it.
+    let arr = unsafe { PyArray1::<T>::borrow_from_array(&view, capsule.into_any()) };
+    let ro = arr.readwrite().make_nonwriteable();
+    let out: Bound<'_, PyAny> = (*ro).clone().into_any();
+    Ok(out.unbind())
+}
+
+/// Convert an `EpicsValue` into a Python object. An array is a read-only
+/// numpy view over the `SharedArray` the client decoded into, the buffer a
+/// monitor's snapshots and the server's stored value share.
 pub fn to_py(py: Python<'_>, v: EpicsValue) -> PyResult<Py<PyAny>> {
     use EpicsValue as V;
-    fn arr<T: numpy::Element + Copy>(py: Python<'_>, v: SharedArray<T>) -> PyResult<Py<PyAny>> {
-        Ok(PyArray1::from_slice(py, &v).into_any().unbind())
-    }
     match v {
         V::String(s) => pv_string_to_py(py, &s),
         V::Short(x) => x.into_py_any(py),
@@ -44,17 +65,17 @@ pub fn to_py(py: Python<'_>, v: EpicsValue) -> PyResult<Py<PyAny>> {
         V::UShort(x) => x.into_py_any(py),
         V::ULong(x) => x.into_py_any(py),
         V::UChar(x) => x.into_py_any(py),
-        V::ShortArray(a) => arr(py, a),
-        V::FloatArray(a) => arr(py, a),
-        V::EnumArray(a) => arr(py, a),
-        V::DoubleArray(a) => arr(py, a),
-        V::LongArray(a) => arr(py, a),
-        V::CharArray(a) => arr(py, a),
-        V::Int64Array(a) => arr(py, a),
-        V::UInt64Array(a) => arr(py, a),
-        V::UShortArray(a) => arr(py, a),
-        V::ULongArray(a) => arr(py, a),
-        V::UCharArray(a) => arr(py, a),
+        V::ShortArray(a) => shared_to_numpy(py, &a),
+        V::FloatArray(a) => shared_to_numpy(py, &a),
+        V::EnumArray(a) => shared_to_numpy(py, &a),
+        V::DoubleArray(a) => shared_to_numpy(py, &a),
+        V::LongArray(a) => shared_to_numpy(py, &a),
+        V::CharArray(a) => shared_to_numpy(py, &a),
+        V::Int64Array(a) => shared_to_numpy(py, &a),
+        V::UInt64Array(a) => shared_to_numpy(py, &a),
+        V::UShortArray(a) => shared_to_numpy(py, &a),
+        V::ULongArray(a) => shared_to_numpy(py, &a),
+        V::UCharArray(a) => shared_to_numpy(py, &a),
         V::StringArray(a) => {
             let items = a
                 .iter()

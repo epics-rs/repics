@@ -9,10 +9,10 @@
 //!
 //! Scalar arrays cross the boundary without copying: the numpy array is
 //! built over the `PvArray<T>` the wire decoder produced, with a capsule
-//! holding a clone of that array as the numpy array's base object.
+//! holding a clone of that array as the numpy array's base object
+//! (`crate::value::shared_to_numpy`, shared with the CA path).
 
 use std::collections::BTreeSet;
-use std::ffi::CString;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use epics_pva_rs::proto::BitSet;
@@ -21,12 +21,11 @@ use epics_pva_rs::pvdata::render_value;
 use epics_pva_rs::pvdata::{
     FieldDesc, PvArray, PvField, ScalarType, ScalarValue, TypedScalarArray, UnionItem, VariantValue,
 };
-use numpy::ndarray::ArrayView1;
-use numpy::{Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{Element, PyReadonlyArray1};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyAttributeError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyCapsule, PyDict, PyFloat, PyInt, PyList, PySet, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PySet, PyString, PyTuple};
 
 // ---------------------------------------------------------------------------
 // Descriptor helpers
@@ -953,22 +952,12 @@ pub fn scalar_to_py(py: Python<'_>, v: &ScalarValue) -> PyResult<Py<PyAny>> {
     }
 }
 
-/// A read-only numpy array over `data`, whose base object keeps the
-/// shared buffer alive. No element is copied.
+/// A read-only numpy array over `data`, no element copied.
 fn arc_to_numpy<T: Element + Copy + Send + Sync + 'static>(
     py: Python<'_>,
     data: &PvArray<T>,
 ) -> PyResult<Py<PyAny>> {
-    let keep = data.clone();
-    let capsule = PyCapsule::new(py, keep, Some(CString::new("repics.pva.array").unwrap()))?;
-    let view = ArrayView1::from(data.as_slice());
-    // SAFETY: the capsule owns a clone of the `PvArray`, whose buffer sits
-    // behind an `Arc` that is never reallocated, so it outlives the numpy
-    // array.
-    let arr = unsafe { PyArray1::<T>::borrow_from_array(&view, capsule.into_any()) };
-    let ro = arr.readwrite().make_nonwriteable();
-    let out: Bound<'_, PyAny> = (*ro).clone().into_any();
-    Ok(out.unbind())
+    crate::value::shared_to_numpy(py, data)
 }
 
 pub fn typed_array_to_py(py: Python<'_>, arr: &TypedScalarArray) -> PyResult<Py<PyAny>> {

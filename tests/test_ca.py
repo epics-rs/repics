@@ -74,6 +74,20 @@ def test_caput_array_roundtrip(ioc):
     numpy.testing.assert_array_equal(v, data)
     assert v.element_count == 8
     assert v[2:4].name == ioc + "wf"
+    # A read-only view over the buffer the client decoded into: the base
+    # chain ends at the PyCapsule keeping that buffer alive, no view owns
+    # its data, and every one starts at the same address.
+    chain = []
+    base = v
+    while isinstance(base, numpy.ndarray):
+        chain.append(base)
+        base = base.base
+    assert type(base).__name__ == "PyCapsule", chain
+    assert all(not x.flags.owndata for x in chain)
+    assert len({x.ctypes.data for x in chain}) == 1
+    assert not v.flags.writeable
+    with pytest.raises(ValueError):
+        v[0] = 1.0
 
 
 def test_cainfo(ioc):
