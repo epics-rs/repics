@@ -11,7 +11,7 @@
 //! variant; a list is a string array if every element is a `str`, else a
 //! `float64` array.
 
-use epics_base_rs::types::{EpicsValue, PvString};
+use epics_base_rs::types::{EpicsValue, PvString, SharedArray};
 use numpy::{PyArray1, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyTypeError;
@@ -22,11 +22,13 @@ pub fn pv_string_to_py(py: Python<'_>, s: &PvString) -> PyResult<Py<PyAny>> {
     s.as_str_lossy().into_py_any(py)
 }
 
-/// Convert an `EpicsValue` into a Python object. Arrays are moved.
+/// Convert an `EpicsValue` into a Python object. Arrays are copied once
+/// out of the `SharedArray` the client decoded into, so the numpy array
+/// stays writable as it was when the variants carried a `Vec`.
 pub fn to_py(py: Python<'_>, v: EpicsValue) -> PyResult<Py<PyAny>> {
     use EpicsValue as V;
-    fn arr<T: numpy::Element>(py: Python<'_>, v: Vec<T>) -> PyResult<Py<PyAny>> {
-        Ok(PyArray1::from_vec(py, v).into_any().unbind())
+    fn arr<T: numpy::Element + Copy>(py: Python<'_>, v: SharedArray<T>) -> PyResult<Py<PyAny>> {
+        Ok(PyArray1::from_slice(py, &v).into_any().unbind())
     }
     match v {
         V::String(s) => pv_string_to_py(py, &s),
@@ -91,7 +93,7 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<PutRequest> {
             return Ok(PutRequest::StrArray(list.extract::<Vec<String>>()?));
         }
         return Ok(PutRequest::Value(EpicsValue::DoubleArray(
-            list.extract::<Vec<f64>>()?,
+            list.extract::<Vec<f64>>()?.into(),
         )));
     }
     if let Some(v) = numpy_to_value(obj)? {
@@ -117,7 +119,7 @@ fn numpy_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Option<EpicsValue>> {
                 if a.ndim() != 1 {
                     return Err(PyTypeError::new_err("only 1-D arrays can be put"));
                 }
-                return Ok(Some(EpicsValue::$variant(a.as_slice()?.to_vec())));
+                return Ok(Some(EpicsValue::$variant(a.as_slice()?.to_vec().into())));
             }
         };
     }
