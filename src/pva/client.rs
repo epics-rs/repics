@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use epics_pva_rs::client_native::ops_v2::{self, MarkedRead, PutLeaf};
 use epics_pva_rs::client_native::{PvaClient, PvaClientBuilder};
-use epics_pva_rs::config::Endpoint;
+use epics_pva_rs::config::parse_endpoints_with_port;
 use epics_pva_rs::proto::BitSet;
 use epics_pva_rs::pv_request::PvRequestExpr;
 use epics_pva_rs::pvdata::encode::marked_changed_bitset;
@@ -93,11 +93,7 @@ fn configure(
     }
     if let Some(v) = conf.get("EPICS_PVA_ADDR_LIST") {
         let default_port = bcast.unwrap_or(5076);
-        let list: Vec<Endpoint> = v
-            .split_whitespace()
-            .filter_map(|tok| Endpoint::parse(tok, default_port))
-            .collect();
-        b = b.addr_list(list);
+        b = b.addr_list(parse_endpoints_with_port(v, default_port));
     }
     if let Some(v) = conf.get("EPICS_PVA_NAME_SERVERS") {
         let default_port = port(conf, "EPICS_PVA_SERVER_PORT")?.unwrap_or(5075);

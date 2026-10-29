@@ -240,11 +240,11 @@ fn desc_from_py(spec: &Bound<'_, PyAny>) -> PyResult<FieldDesc> {
     match code.as_str() {
         "S" => Ok(FieldDesc::Structure {
             struct_id: id,
-            fields: members,
+            fields: members.into(),
         }),
         "aS" => Ok(FieldDesc::StructureArray {
             struct_id: id,
-            fields: members,
+            fields: members.into(),
         }),
         "U" => Ok(FieldDesc::Union {
             struct_id: id,
@@ -263,7 +263,7 @@ fn desc_from_py(spec: &Bound<'_, PyAny>) -> PyResult<FieldDesc> {
 fn members_from_py(spec: &Bound<'_, PyAny>) -> PyResult<Vec<(String, FieldDesc)>> {
     if let Ok(t) = spec.cast::<Type>() {
         return match &*t.get().desc {
-            FieldDesc::Structure { fields, .. } => Ok(fields.clone()),
+            FieldDesc::Structure { fields, .. } => Ok(fields.to_vec()),
             _ => Err(PyTypeError::new_err("member spec Type must be a structure")),
         };
     }
@@ -320,7 +320,7 @@ impl Type {
         } else {
             FieldDesc::Structure {
                 struct_id: id.clone().unwrap_or_default(),
-                fields: members_from_py(spec)?,
+                fields: members_from_py(spec)?.into(),
             }
         };
         let desc = match (desc, id) {

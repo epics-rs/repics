@@ -18,11 +18,13 @@
 //! wire layer reads directly as its `MonitorStream`: a post is one hop,
 //! and a slow client holds back nothing but its own ring.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
-use epics_pva_rs::config::Endpoint;
+use epics_base_rs::types::{PvString, RecordName};
+use epics_pva_rs::config::{parse_endpoints_with_port, resolve_server_intf_addr_list};
 use epics_pva_rs::proto::BitSet;
 use epics_pva_rs::pvdata::encode::{changed_bitset_paths, fill_unmarked_from_prior};
 use epics_pva_rs::pvdata::{FieldDesc, PvField, RpcReply};
@@ -30,9 +32,9 @@ use epics_pva_rs::server_native::config::ClientCredentials;
 use epics_pva_rs::server_native::runtime::PvaServer as RsServer;
 use epics_pva_rs::server_native::shared_pv::{MonitorOutbox, MonitorRing, SharedPV, SharedSource};
 use epics_pva_rs::server_native::source::{
-    AccessChecked, AccessGate, ChannelContext, ChannelInvalidator, ChannelSource, MonitorOptions,
-    MonitorStream, MonitorUpdate, OpError, RPC_NOT_IMPLEMENTED, SourceRead, SubscriptionSeed,
-    WatermarkEvent, put_denied,
+    AccessChecked, AccessGate, ChannelContext, ChannelInvalidator, ChannelSource, Marks,
+    MonitorOptions, MonitorStream, MonitorUpdate, OpError, PostValue, RPC_NOT_IMPLEMENTED,
+    SourceRead, SubscriptionSeed, WatermarkEvent, put_denied,
 };
 use epics_pva_rs::server_native::{CompositeSource, DynSource, PvaServerConfig};
 use pyo3::exceptions::PyValueError;
@@ -50,7 +52,7 @@ use crate::runtime::{block_on, into_py_future};
 fn no_creds() -> Arc<ClientCredentials> {
     Arc::new(ClientCredentials {
         method: "anonymous".into(),
-        account: String::new(),
+        account: PvString::new(),
         host: String::new(),
         authority: String::new(),
         roles: Vec::new(),
@@ -128,8 +130,8 @@ impl ServerOperation {
     }
 
     /// The client's account as authenticated by the server.
-    fn account(&self) -> &str {
-        &self.creds.account
+    fn account(&self) -> Cow<'_, str> {
+        self.creds.account.as_str_lossy()
     }
 
     /// The authentication method (`"anonymous"`, `"ca"`, `"x509"`, ...).
@@ -280,8 +282,8 @@ impl Subscriber {
         match self {
             Subscriber::Marked(outbox) => outbox.post(
                 MonitorUpdate {
-                    value: value.clone(),
-                    marked: Some(marked.to_vec()),
+                    value: PostValue::Owned(value.clone()),
+                    marked: Some(Marks::Owned(marked.to_vec())),
                     type_changed: false,
                     overrun: Vec::new(),
                 },
@@ -446,7 +448,10 @@ pub struct PySource {
 }
 
 impl PySource {
-    fn entry(&self, name: &str) -> Option<Arc<PvEntry>> {
+    /// Every served name came from a Python `str`, so a name that is not
+    /// UTF-8 is not served.
+    fn entry(&self, name: &[u8]) -> Option<Arc<PvEntry>> {
+        let name = std::str::from_utf8(name).ok()?;
         self.entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -468,42 +473,42 @@ impl ChannelSource for PySource {
         self.inner.set_channel_invalidator(invalidator)
     }
 
-    fn list_pvs(&self) -> impl std::future::Future<Output = Vec<String>> + Send {
+    fn list_pvs(&self) -> Vec<RecordName> {
         self.inner.list_pvs()
     }
 
-    fn has_pv(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
+    fn has_pv(&self, name: &[u8]) -> impl std::future::Future<Output = bool> + Send {
         self.inner.has_pv(name)
     }
 
     fn get_introspection(
         &self,
-        name: &str,
+        name: &[u8],
     ) -> impl std::future::Future<Output = Option<FieldDesc>> + Send {
         self.inner.get_introspection(name)
     }
 
     fn await_introspection(
         &self,
-        name: &str,
+        name: &[u8],
         ctx: ChannelContext,
     ) -> impl std::future::Future<Output = Option<FieldDesc>> + Send {
         self.inner.await_introspection(name, ctx)
     }
 
-    fn get_value(&self, name: &str) -> impl std::future::Future<Output = Option<PvField>> + Send {
+    fn get_value(&self, name: &[u8]) -> impl std::future::Future<Output = Option<PvField>> + Send {
         self.inner.get_value(name)
     }
 
     fn put_value(
         &self,
-        name: &str,
+        name: &[u8],
         value: PvField,
     ) -> impl std::future::Future<Output = Result<(), OpError>> + Send {
         // The wire layer only ever issues delta PUTs; a full-value put
         // is the same operation with every bit marked.
         let entry = self.entry(name);
-        let name = name.to_string();
+        let name = String::from_utf8_lossy(name).into_owned();
         async move {
             let Some(entry) = entry else {
                 return Err(OpError::failed(format!("no such PV: {name}")));
@@ -567,13 +572,13 @@ impl ChannelSource for PySource {
         }
     }
 
-    fn is_writable(&self, name: &str) -> impl std::future::Future<Output = bool> + Send {
+    fn is_writable(&self, name: &[u8]) -> impl std::future::Future<Output = bool> + Send {
         self.inner.is_writable(name)
     }
 
     fn subscribe(
         &self,
-        name: &str,
+        name: &[u8],
     ) -> impl std::future::Future<Output = Option<MonitorStream<PvField>>> + Send {
         let entry = self.entry(name);
         async move {
@@ -612,12 +617,12 @@ impl ChannelSource for PySource {
 
     fn rpc(
         &self,
-        name: &str,
+        name: &[u8],
         request_desc: FieldDesc,
         request_value: PvField,
     ) -> impl std::future::Future<Output = Result<RpcReply, OpError>> + Send {
         let entry = self.entry(name);
-        let name = name.to_string();
+        let name = String::from_utf8_lossy(name).into_owned();
         async move {
             let Some(entry) = entry else {
                 return Err(OpError::failed(format!("no such PV: {name}")));
@@ -677,31 +682,31 @@ impl ChannelSource for PySource {
         }
     }
 
-    fn process(&self, name: &str) -> impl std::future::Future<Output = Result<(), OpError>> + Send {
-        self.inner.process(name)
-    }
-
-    fn notify_watermark(&self, name: &str, ctx: &ChannelContext, ev: WatermarkEvent) {
+    fn notify_watermark(&self, name: &[u8], ctx: &ChannelContext, ev: WatermarkEvent) {
         self.inner.notify_watermark(name, ctx, ev)
     }
 
-    fn notify_monitor_start(&self, name: &str, ctx: &ChannelContext, start: bool) {
+    fn notify_monitor_start(&self, name: &[u8], ctx: &ChannelContext, start: bool) {
         self.inner.notify_monitor_start(name, ctx, start)
     }
 
-    fn notify_channel_open(&self, name: &str, _ctx: &ChannelContext) {
+    fn notify_channel_open(&self, name: &[u8], _ctx: &ChannelContext) {
         if let Some(entry) = self.entry(name) {
             self.attached
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .entry(name.to_string())
+                .entry(String::from_utf8_lossy(name).into_owned())
                 .or_default()
                 .push_back(entry.clone());
             entry.pv.attach_channel();
         }
     }
 
-    fn notify_channel_close(&self, name: &str, _ctx: &ChannelContext) {
+    fn notify_channel_close(&self, name: &[u8], _ctx: &ChannelContext) {
+        // Only a served name was attached.
+        let Ok(name) = std::str::from_utf8(name) else {
+            return;
+        };
         let entry = {
             let mut attached = self.attached.lock().unwrap_or_else(|e| e.into_inner());
             let entry = attached.get_mut(name).and_then(|q| q.pop_front());
@@ -717,7 +722,7 @@ impl ChannelSource for PySource {
 
     fn monitor_watermarks(
         &self,
-        name: &str,
+        name: &[u8],
     ) -> impl std::future::Future<Output = Option<(usize, usize)>> + Send {
         self.inner.monitor_watermarks(name)
     }
@@ -921,15 +926,9 @@ fn configure(mut c: PvaServerConfig, conf: &HashMap<String, String>) -> PyResult
         c.udp_port = p;
     }
     if let Some(v) = first(conf, &["EPICS_PVAS_INTF_ADDR_LIST"]) {
-        let mut ifaces = Vec::new();
-        for tok in v.split_whitespace() {
-            let host = tok.rsplit_once(':').map(|(h, _)| h).unwrap_or(tok);
-            let ip: IpAddr = host.parse().map_err(|e| {
-                PyValueError::new_err(format!("EPICS_PVAS_INTF_ADDR_LIST entry {tok:?}: {e}"))
-            })?;
-            ifaces.push(ip);
-        }
-        c.interfaces = ifaces;
+        c.interfaces = resolve_server_intf_addr_list(v, c.tcp_port)
+            .map_err(|e| PyValueError::new_err(format!("EPICS_PVAS_INTF_ADDR_LIST: {e}")))?
+            .unwrap_or_default();
     }
     if let Some(v) = first(
         conf,
@@ -945,10 +944,7 @@ fn configure(mut c: PvaServerConfig, conf: &HashMap<String, String>) -> PyResult
         &["EPICS_PVAS_BEACON_ADDR_LIST", "EPICS_PVA_ADDR_LIST"],
     ) {
         let default_port = if c.udp_port == 0 { 5076 } else { c.udp_port };
-        c.beacon_destinations = v
-            .split_whitespace()
-            .filter_map(|tok| Endpoint::parse(tok, default_port))
-            .collect();
+        c.beacon_destinations = parse_endpoints_with_port(v, default_port);
     }
     Ok(c)
 }
@@ -987,7 +983,9 @@ impl PvaServer {
             None
         } else {
             let base = if useenv {
-                PvaServerConfig::default().with_env()
+                PvaServerConfig::default()
+                    .with_env()
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?
             } else {
                 PvaServerConfig::default()
             };
@@ -1005,8 +1003,13 @@ impl PvaServer {
         let udp_port = cfg.udp_port;
         let addr = if isolate {
             IpAddr::from([127, 0, 0, 1])
-        } else if let Some(ip) = cfg.interfaces.iter().find(|ip| !ip.is_unspecified()) {
-            *ip
+        } else if let Some(ip) = cfg
+            .interfaces
+            .iter()
+            .map(|e| e.addr.ip())
+            .find(|ip| !ip.is_unspecified())
+        {
+            ip
         } else if cfg.bind_ip.is_unspecified() {
             IpAddr::from([127, 0, 0, 1])
         } else {

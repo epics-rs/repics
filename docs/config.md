@@ -52,7 +52,6 @@ change after the first call has no effect on it.
 | `EPICS_CA_NAMESERVER_QUEUE_DEPTH` | `256` | queued searches per name server connection; values below 8 become 8 |
 | `EPICS_CA_DNS_REFRESH_SECS` | `60` | seconds between re-resolving host names in the address lists; must be greater than 0 |
 | `EPICS_CA_MONITOR_QUEUE` | `256` | per-subscription update queue; values below 10 become 10. Read when a subscription is created |
-| `EPICS_CA_PUT_TIMEOUT` | `30` | seconds a put with completion waits for the server before failing. Read per put |
 | `EPICS_CA_USE_SHELL_VARS` | `YES` | expand `${VAR}` and `$(VAR)` in the address list variables; an unknown name expands to nothing |
 | `EPICS_RS_CLIENT_IGNORE` | `""` | whitespace-separated IPv4 addresses (an optional `:port` is stripped) whose beacons are ignored |
 | `EPICS_CA_DISCOVERY` | `""` | extra search sources: `static:<addr>[,<addr>...]` adds targets; the `mdns` and `dnssd:<zone>` tokens are accepted but do nothing in this build and log a warning |
@@ -80,13 +79,15 @@ regardless of `useenv`.
 | `EPICS_PVA_SERVER_PORT` | `5075` | default TCP port for name servers; when unset, `EPICS_PVAS_SERVER_PORT` is tried next. Also settable through `conf` |
 | `EPICS_PVA_NAME_SERVERS` | `""` | whitespace-separated `host[:port]` TCP endpoints searched directly. Also settable through `conf` |
 | `EPICS_PVA_CONN_TMO` | `30` | TCP idle timeout in seconds. The effective timeout is four thirds of the value (30 gives 40); a non-finite, non-positive or huge value resets to 40 and anything below 2 becomes 2. Echo requests go out every three eighths of the effective timeout, clamped to 1 to 15 s |
-| `EPICS_PVA_AUTH_USER` | `$USER`, then `$USERNAME`, then `nobody` | the account presented to servers by the plain authentication method |
-| `EPICS_PVA_AUTH_HOST` | the host name, else `invalidhost.` | the host presented to servers |
 | `EPICS_PVA_INTF_ADDR_LIST` | `""` | interfaces the client binds its search sockets to |
 
 Port values are read as integers and truncated to 16 bits; surrounding
 whitespace is tolerated. Timeouts must be finite and positive; anything
 else is ignored and the default stays.
+
+The plain authentication method presents the operating-system account
+(`nobody` when it cannot be looked up) and the host name (`invalidhost.`
+when it cannot be looked up); no variable overrides either.
 
 ## PVA server
 
