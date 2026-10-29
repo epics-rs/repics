@@ -572,7 +572,7 @@ checksum = "869b0adbda23651a9c5c0c3d270aac9fcb52e8622a8f2b17e57802d7791962f2"
 
 [[package]]
 name = "epics-base-rs"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -583,20 +583,21 @@ dependencies = [
  "epics-macros-rs",
  "epics-rtems-boot",
  "hostname",
- "if-addrs",
  "libc",
  "parking_lot",
  "rustyline",
  "serde_json",
+ "smallvec",
  "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "epics-ca-rs"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -604,9 +605,9 @@ dependencies = [
  "clap",
  "dashmap",
  "epics-base-rs",
+ "epics-libcom-rs",
  "epics-rtems-boot",
  "futures-util",
- "if-addrs",
  "libc",
  "metrics",
  "parking_lot",
@@ -619,22 +620,22 @@ dependencies = [
 
 [[package]]
 name = "epics-libcom-rs"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
  "chrono",
- "epics-rtems-boot",
  "hostname",
- "if-addrs",
  "libc",
  "parking_lot",
+ "parking_lot_core",
  "socket2 0.5.10",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "epics-macros-rs"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -644,19 +645,20 @@ dependencies = [
 
 [[package]]
 name = "epics-pva-rs"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "chrono",
  "clap",
  "dashmap",
  "der",
  "epics-base-rs",
+ "epics-libcom-rs",
  "epics-macros-rs",
  "futures-util",
  "hmac 0.13.0",
  "hostname",
- "if-addrs",
  "libc",
  "p12",
  "parking_lot",
@@ -681,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "epics-rtems-boot"
-version = "0.31.0"
+version = "0.33.0"
 dependencies = [
  "cc",
  "libc",
@@ -920,16 +922,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "if-addrs"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
-dependencies = [
- "libc",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

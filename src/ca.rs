@@ -343,7 +343,7 @@ pub struct ChannelInfo {
 impl From<RsChannelInfo> for ChannelInfo {
     fn from(i: RsChannelInfo) -> Self {
         Self {
-            name: i.pv_name,
+            name: i.pv_name.to_string(),
             host: i.server_addr.to_string(),
             datatype: i.native_type.dbf_code().name(),
             dbr: i.native_type.ca_wire_type(),
@@ -706,7 +706,7 @@ impl CaChannel {
                 None => native,
             };
             let count = read_count(&ch, count).map_err(map_ca)?;
-            ch.get_with_dbr_type(base + req.form, count)
+            ch.get_with_dbr_type(base + req.form, count, duration_or_forever(None))
                 .await
                 .map_err(map_ca)
         })
@@ -724,9 +724,11 @@ impl CaChannel {
         bounded(timeout, async {
             ensure_connected(&ch, CaOp::Write).await?;
             match (req, wait) {
-                (PutRequest::Str(s), true) => ch.put_string(&s).await,
+                (PutRequest::Str(s), true) => ch.put_string(&s, duration_or_forever(None)).await,
                 (PutRequest::Str(s), false) => ch.put_string_nowait(&s).await,
-                (PutRequest::StrArray(a), true) => ch.put_string_array(&a).await,
+                (PutRequest::StrArray(a), true) => {
+                    ch.put_string_array(&a, duration_or_forever(None)).await
+                }
                 (PutRequest::StrArray(a), false) => ch.put_string_array_nowait(&a).await,
                 (PutRequest::Value(v), true) => {
                     ch.put_with_timeout(&v, duration_or_forever(None)).await

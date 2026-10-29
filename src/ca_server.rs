@@ -5,32 +5,36 @@
 //! `epics_base_rs` `ProcessVariable` value cell inside one `PvDatabase`. A
 //! client PUT reaches Python through the PV's `WriteHook`: the hook turns the
 //! write into a `CaServerOperation` on a `CaWorkQueue`, a Python-owned drain
-//! loop runs the handler and finishes it, and the hook returns the handler's
-//! verdict to the CA client. A monitor is served by the `ProcessVariable`'s
+//! loop runs the handler and finishes it, and the handler's verdict answers
+//! the client's put callback. A monitor is served by the `ProcessVariable`'s
 //! own subscriber fan-out — a `post()` is one `pv.set()`, and every
 //! subscriber sees it, exactly as pvxs `SharedPV::post` does for PVA.
 //!
-//! No Python code runs on a runtime worker: the hook only enqueues and awaits
-//! a oneshot, and the handler runs on a Python thread (or asyncio task) that
-//! pulls the operation with `recv`/`recv_async`.
+//! No Python code runs on a runtime worker: the hook only enqueues, and the
+//! handler runs on a Python thread (or asyncio task) that pulls the operation
+//! with `recv`/`recv_async`.
 //!
 //! CA has no RPC and no per-PV connect edge, so the queue carries only PUTs;
 //! p4p's `onFirstConnect`/`onLastDisconnect`/`rpc` have no CA counterpart.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use epics_base_rs::error::DbStatus;
 use epics_base_rs::server::access_security::new_acf_cell;
 use epics_base_rs::server::database::PvDatabase;
-use epics_base_rs::server::pv::{ProcessVariable, WriteContext, WriteHook};
+use epics_base_rs::server::pv::{
+    ProcessVariable, PvWrite, WriteContext, WriteDone, WriteForward, WriteHook,
+};
 use epics_base_rs::types::{EpicsValue, PvString};
 use epics_ca_rs::CaError as RsCaError;
 use epics_ca_rs::server::CaServer as RsServer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -55,9 +59,15 @@ fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<EpicsValue> {
 // CaServerOperation
 // ---------------------------------------------------------------------------
 
-/// `Ok(())` accepts the write (the handler is expected to have `post()`ed the
-/// new value); `Err(text)` rejects it, and the client's `WRITE_NOTIFY` fails.
-type OpReply = Result<(), String>;
+/// Where the handler's verdict goes.
+enum Reply {
+    /// A put callback (`WRITE_NOTIFY`), which the verdict answers.
+    Notify(WriteDone),
+    /// A plain write, whose completion nothing reports.
+    Plain,
+    /// `done()` was called.
+    Done,
+}
 
 /// A client PUT waiting for the Python handler (p4p `ServerOperation`).
 #[pyclass(name = "CaServerOperation", module = "repics._repics", frozen)]
@@ -65,7 +75,7 @@ pub struct CaServerOperation {
     name: String,
     value: EpicsValue,
     ctx: WriteContext,
-    reply: Mutex<Option<oneshot::Sender<OpReply>>>,
+    reply: Mutex<Reply>,
 }
 
 #[pymethods]
@@ -86,13 +96,13 @@ impl CaServerOperation {
     }
 
     /// The client's CA `CLIENT_NAME` username, or empty.
-    fn account(&self) -> &str {
-        &self.ctx.user
+    fn account(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.ctx.user)
     }
 
     /// The client's CA `HOST_NAME`, or the peer IP.
-    fn host(&self) -> &str {
-        &self.ctx.host
+    fn host(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.ctx.host)
     }
 
     /// The value the client wrote, as a Python scalar/array/str.
@@ -101,20 +111,23 @@ impl CaServerOperation {
     }
 
     /// Complete the operation. `error` rejects the write (the client sees the
-    /// failure); the default accepts it. Calling it twice is an error.
+    /// failure); the default accepts it, and the handler is expected to have
+    /// `post()`ed the new value. Calling it twice is an error.
     #[pyo3(signature = (error=None))]
     fn done(&self, error: Option<String>) -> PyResult<()> {
-        let tx = self
-            .reply
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or_else(|| PyValueError::new_err("done() already called"))?;
-        // The server task may have given up (client gone); nothing to do.
-        let _ = tx.send(match error {
-            Some(msg) => Err(msg),
-            None => Ok(()),
-        });
+        let reply = std::mem::replace(
+            &mut *self.reply.lock().unwrap_or_else(|e| e.into_inner()),
+            Reply::Done,
+        );
+        match reply {
+            Reply::Done => return Err(PyValueError::new_err("done() already called")),
+            Reply::Plain => {}
+            // CA answers a put callback with a status only; the text is lost.
+            Reply::Notify(done) => match error {
+                Some(_) => done.fail(DbStatus::FAILED),
+                None => done.succeed(),
+            },
+        }
         Ok(())
     }
 }
@@ -268,7 +281,6 @@ impl CaPvEntry {
                 .await
                 .map_err(map_ca_write)?;
             db.find_pv(&name)
-                .await
                 .ok_or_else(|| CaError::new_err(("registered PV not found", 0u32)))
         })
     }
@@ -374,44 +386,41 @@ impl CaPvEntry {
 }
 
 /// Build the write hook that routes a client PUT to Python. It captures the
-/// queue and the PV token, enqueues a `CaServerOperation`, and awaits the
-/// handler's verdict. Returning `Ok(())` tells the CA server the write was
-/// handled (the handler `post()`ed the value); `Err` fails it at the client.
+/// queue and the PV token and enqueues a `CaServerOperation` when the write is
+/// sent; the hook must not wait for the handler, since the CA server awaits it
+/// in the circuit's dispatch. The handler is expected to `post()` the value.
 fn make_hook(
     events: mpsc::UnboundedSender<Event>,
     token: Arc<Py<PyAny>>,
     name: Arc<OnceLock<String>>,
 ) -> WriteHook {
-    Arc::new(move |value: EpicsValue, ctx: WriteContext| {
+    Arc::new(move |write: PvWrite, ctx: WriteContext| {
         let events = events.clone();
         let token = token.clone();
         let name = name.clone();
         Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            let op = CaServerOperation {
-                name: name.get().cloned().unwrap_or_default(),
-                value,
-                ctx,
-                reply: Mutex::new(Some(tx)),
+            let value = match write {
+                PvWrite::Value(value) => value,
+                // pcas's own `casPV::write` (casPV.cc:107-110).
+                PvWrite::AlarmAck(..) => return Err(DbStatus::CAS_APP_NO_SUPPORT),
             };
-            if events
-                .send(Event {
-                    token,
-                    kind: EventKind::Put(op),
-                })
-                .is_err()
-            {
-                return Err(RsCaError::InvalidValue(
-                    "SharedPV handler queue is stopped".into(),
-                ));
-            }
-            match rx.await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(msg)) => Err(RsCaError::InvalidValue(msg)),
-                Err(_) => Err(RsCaError::InvalidValue(
-                    "handler dropped the operation without done()".into(),
-                )),
-            }
+            let forward: WriteForward = Box::new(move |done| {
+                let op = CaServerOperation {
+                    name: name.get().cloned().unwrap_or_default(),
+                    value,
+                    ctx,
+                    reply: Mutex::new(done.map_or(Reply::Plain, Reply::Notify)),
+                };
+                events
+                    .send(Event {
+                        token,
+                        kind: EventKind::Put(op),
+                    })
+                    .map_err(|_| {
+                        RsCaError::InvalidValue("SharedPV handler queue is stopped".into())
+                    })
+            });
+            Ok(forward)
         })
     })
 }

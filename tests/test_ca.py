@@ -367,11 +367,13 @@ def test_connection_events_on_a_fresh_channel(ioc):
     ch = repics.context().channel(ioc + "ai")
     events = ch.events()
     try:
+        # Rights, then connected, as C libca notifies: rsrv sends
+        # ACCESS_RIGHTS ahead of the CREATE_CHAN reply.
         ev = events.recv(timeout=2.0)
-        assert ev is not None and ev.kind == "connected"
+        assert ev is not None and ev.kind == "access_rights" and ev.read and ev.write
+        ev = events.recv(timeout=2.0)
+        assert ev.kind == "connected"
         assert ch.connected and ch.dbr == repics.DBR_DOUBLE and ch.element_count == 1
-        ev = events.recv(timeout=2.0)
-        assert ev.kind == "access_rights" and ev.read and ev.write
         with pytest.raises(repics.CaTimeout):
             events.recv(timeout=0.2)
     finally:
