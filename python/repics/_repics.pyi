@@ -143,10 +143,19 @@ class CaChannel:
         timeout: float | None = None,
     ) -> Awaitable[Snapshot]: ...
     def put(
-        self, value: Any, wait: bool = True, timeout: float | None = None, connect_timeout: float | None = None
+        self,
+        value: Any,
+        wait: bool = True,
+        timeout: float | None = None,
+        connect_timeout: float | None = None,
+        str_as_chars: bool = False,
     ) -> None: ...
     def put_notify(
-        self, value: Any, timeout: float | None = None, connect_timeout: float | None = None
+        self,
+        value: Any,
+        timeout: float | None = None,
+        connect_timeout: float | None = None,
+        str_as_chars: bool = False,
     ) -> CaPutNotify: ...
     def put_async(
         self, value: Any, wait: bool = True, timeout: float | None = None, connect_timeout: float | None = None

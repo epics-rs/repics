@@ -46,6 +46,14 @@ record(waveform, "$(P)chars") {
     field(FTVL, "CHAR")
     field(NELM, "32")
 }
+record(waveform, "$(P)line") {
+    field(FTVL, "CHAR")
+    field(NELM, "64")
+}
+record(waveform, "$(P)char1") {
+    field(FTVL, "CHAR")
+    field(NELM, "1")
+}
 record(stringin, "$(P)si") {
     field(VAL, "input")
     field(PINI, "YES")

@@ -350,6 +350,37 @@ def test_char_string_roundtrip(ioc):
     assert isinstance(raw, repics.AugmentedArray) and raw.dtype == numpy.uint8
 
 
+def test_pv_put_sends_a_str_to_a_char_array_as_its_bytes(ioc):
+    # pyepics ca.put: the bytes and a NUL, cut to the element count, where
+    # a DBR_STRING holds 39 bytes.
+    from repics.pv import PV
+
+    line = "umv th 0.6; umv tth 1.2; ct 1; wa; p date()"
+    assert len(line) > 39
+    pv = PV(ioc + "line", auto_monitor=False)
+    pv.put(line, wait=True)
+    assert ca.caget(ioc + "line").tobytes() == line.encode() + b"\0"
+    pv.put(line.upper())
+    assert ca.caget(ioc + "line", datatype=repics.DBR_CHAR_STR) == line.upper()
+    done = threading.Event()
+    pv.put(line[::-1], callback=lambda **kw: done.set())
+    assert done.wait(2.0)
+    assert ca.caget(ioc + "line", datatype=repics.DBR_CHAR_STR) == line[::-1]
+    pv.put("y" * 70, wait=True)
+    assert ca.caget(ioc + "line").tobytes() == b"y" * 64
+    pv.disconnect()
+
+    one = PV(ioc + "char1", auto_monitor=False)
+    one.put("7", wait=True)
+    assert ca.caget(ioc + "char1") == 7
+    one.disconnect()
+    s = PV(ioc + "str", auto_monitor=False)
+    s.put("plain", wait=True)
+    assert ca.caget(ioc + "str") == "plain"
+    s.put("hello", wait=True)
+    s.disconnect()
+
+
 def test_count_conventions(ioc):
     ca.caput(ioc + "wf", numpy.arange(5.0), wait=True)
     assert len(ca.caget(ioc + "wf")) == 5  # autosize: the record's current count

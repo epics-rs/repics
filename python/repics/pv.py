@@ -229,13 +229,23 @@ class PV:
         or failure, as libca calls a put callback; that can be after
         ``timeout`` has passed."""
         connect = self._connect_timeout()
-        if callback is None and not use_complete:
-            ca.caput(self.pvname, value, wait=wait, timeout=timeout, connect_timeout=connect)
-            return
         deadline = Deadline(timeout)
+        if callback is None and not use_complete:
+            channel(self.pvname).put(
+                value,
+                wait=wait,
+                timeout=deadline.remaining(),
+                connect_timeout=connect,
+                str_as_chars=True,
+            )
+            note_connected(self.pvname)
+            return
         self.put_complete = False
         sent = channel(self.pvname).put_notify(
-            put_value(value, None), timeout=deadline.remaining(), connect_timeout=connect
+            put_value(value, None),
+            timeout=deadline.remaining(),
+            connect_timeout=connect,
+            str_as_chars=True,
         )
         note_connected(self.pvname)
         failed: list[CaError] = []

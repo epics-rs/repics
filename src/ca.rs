@@ -60,6 +60,7 @@ fn read_count(ch: &RsChannel, count: i64) -> CaResult<ReqCount> {
 
 const DBR_STRING_BASE: u16 = 0;
 const DBR_ENUM_BASE: u16 = 3;
+const DBR_CHAR_BASE: u16 = 4;
 
 /// What a read asks for, resolved against the channel's native type once
 /// it is connected (see [`CaChannel::do_get`]).
@@ -93,6 +94,34 @@ async fn ensure_connected(ch: &RsChannel, op: CaOp, connect_timeout: Option<f64>
     } else {
         Err(access_denied(op))
     }
+}
+
+/// Connect for a write as [`ensure_connected`] does, then shape `req` for
+/// the native type. With `str_as_chars`, pyepics `ca.put`'s rule: a str to
+/// a CHAR channel of more than one element goes as its UTF-8 bytes and a
+/// NUL, cut to the element count, where a DBR_STRING holds 39 bytes.
+async fn connect_for_put(
+    ch: &RsChannel,
+    req: PutRequest,
+    str_as_chars: bool,
+    connect_timeout: Option<f64>,
+) -> PyResult<PutRequest> {
+    ensure_connected(ch, CaOp::Write, connect_timeout).await?;
+    let PutRequest::Str(s) = req else {
+        return Ok(req);
+    };
+    if !str_as_chars {
+        return Ok(PutRequest::Str(s));
+    }
+    let native = ch.native_field_type().map_err(map_ca_write)?;
+    let count = ch.element_count().map_err(map_ca_write)? as usize;
+    if native.ca_wire_type() != DBR_CHAR_BASE || count < 2 {
+        return Ok(PutRequest::Str(s));
+    }
+    let mut chars = s.into_bytes();
+    chars.push(0);
+    chars.truncate(count);
+    Ok(PutRequest::Value(EpicsValue::CharArray(chars.into())))
 }
 
 /// A sent write's completion: the server's status or a disconnect, with no
@@ -681,6 +710,7 @@ impl CaContext {
                 Ok(none_on_success(CaChannel::do_put(
                     c.inner.clone(),
                     req,
+                    false,
                     wait,
                     timeout,
                     connect_timeout,
@@ -747,12 +777,13 @@ impl CaChannel {
     async fn do_put(
         ch: RsChannel,
         req: PutRequest,
+        str_as_chars: bool,
         wait: bool,
         timeout: Option<f64>,
         connect_timeout: Option<f64>,
     ) -> PyResult<()> {
         bounded(timeout, async {
-            ensure_connected(&ch, CaOp::Write, connect_timeout).await?;
+            let req = connect_for_put(&ch, req, str_as_chars, connect_timeout).await?;
             if wait {
                 let reply = send_put_notify(&ch, req).map_err(map_ca_write)?;
                 return reply.await.map_err(map_ca_write);
@@ -901,8 +932,10 @@ impl CaChannel {
     /// Write the channel. `wait=True` returns after the server has
     /// processed the record (`ca_put_callback`); `wait=False` returns once
     /// the request is on the wire. `timeout` bounds the whole call,
-    /// `connect_timeout` its wait for the connection.
-    #[pyo3(signature = (value, wait=true, timeout=None, connect_timeout=None))]
+    /// `connect_timeout` its wait for the connection. `str_as_chars` sends
+    /// a str to a CHAR array as its bytes, as pyepics does; else a str is a
+    /// DBR_STRING the server converts, as aioca sends it.
+    #[pyo3(signature = (value, wait=true, timeout=None, connect_timeout=None, str_as_chars=false))]
     fn put(
         &self,
         py: Python<'_>,
@@ -910,31 +943,41 @@ impl CaChannel {
         wait: bool,
         timeout: Option<f64>,
         connect_timeout: Option<f64>,
+        str_as_chars: bool,
     ) -> PyResult<()> {
         let req = value::from_py(value)?;
         block_on(
             py,
-            Self::do_put(self.inner.clone(), req, wait, timeout, connect_timeout),
+            Self::do_put(
+                self.inner.clone(),
+                req,
+                str_as_chars,
+                wait,
+                timeout,
+                connect_timeout,
+            ),
         )
     }
 
     /// Send the write as `ca_array_put_callback` and return its pending
     /// completion. Raises if nothing was sent; `timeout` bounds connecting
-    /// and sending, `connect_timeout` the connect alone.
-    #[pyo3(signature = (value, timeout=None, connect_timeout=None))]
+    /// and sending, `connect_timeout` the connect alone; `str_as_chars` as
+    /// in `put`.
+    #[pyo3(signature = (value, timeout=None, connect_timeout=None, str_as_chars=false))]
     fn put_notify(
         &self,
         py: Python<'_>,
         value: &Bound<'_, PyAny>,
         timeout: Option<f64>,
         connect_timeout: Option<f64>,
+        str_as_chars: bool,
     ) -> PyResult<CaPutNotify> {
         let req = value::from_py(value)?;
         let ch = self.inner.clone();
         let reply = block_on(
             py,
             bounded(timeout, async move {
-                ensure_connected(&ch, CaOp::Write, connect_timeout).await?;
+                let req = connect_for_put(&ch, req, str_as_chars, connect_timeout).await?;
                 send_put_notify(&ch, req).map_err(map_ca_write)
             }),
         )?;
@@ -955,7 +998,14 @@ impl CaChannel {
         let req = value::from_py(value)?;
         into_py_future(
             py,
-            Self::do_put(self.inner.clone(), req, wait, timeout, connect_timeout),
+            Self::do_put(
+                self.inner.clone(),
+                req,
+                false,
+                wait,
+                timeout,
+                connect_timeout,
+            ),
         )
     }
 
