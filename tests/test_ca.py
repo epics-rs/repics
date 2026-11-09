@@ -178,6 +178,72 @@ def test_pv_put_after_a_drop_fails_at_the_connect_bound_and_is_never_sent(ioc2):
     ca.purge_channel_caches()
 
 
+def test_pv_put_callback_is_not_called_for_a_write_never_sent(ioc):
+    from repics.pv import PV
+
+    calls = []
+    pv = PV(ioc + "no-such-pv", connection_timeout=0.3)
+    t0 = time.monotonic()
+    with pytest.raises(repics.CaTimeout, match="channel not found"):
+        pv.put(1, callback=lambda **kw: calls.append(kw))
+    assert time.monotonic() - t0 < 2.0
+    time.sleep(0.3)
+    assert calls == [] and not pv.put_complete
+    pv.disconnect()
+
+
+def test_pv_put_callback_is_called_when_the_server_fails_the_write(ioc):
+    from repics.pv import PV
+
+    calls = []
+    done = threading.Event()
+
+    def cb(**kw):
+        calls.append(kw)
+        done.set()
+
+    pv = PV(ioc + "ro")
+    pv.put(1, callback=cb, callback_data="x")
+    assert done.wait(2.0) and pv.put_complete
+    assert calls == [{"pvname": ioc + "ro", "data": "x"}]
+    done.clear()
+    with pytest.raises(repics.CaError) as e:
+        pv.put(2, wait=True, timeout=2.0, callback=cb)
+    assert e.value.status != repics.ECA_NORMAL
+    assert done.is_set() and len(calls) == 2
+    assert ca.caget(ioc + "ro") == 7
+    pv.disconnect()
+
+
+def test_pv_put_callback_runs_after_the_callers_timeout(ioc2):
+    from repics.pv import PV
+
+    done = threading.Event()
+    pv = PV(ioc2.prefix + "slow.A")
+    t0 = time.monotonic()
+    with pytest.raises(repics.CaTimeout, match="timed out after"):
+        pv.put(1, wait=True, timeout=0.3, callback=lambda **kw: done.set())
+    assert time.monotonic() - t0 < 1.5
+    assert not done.is_set() and not pv.put_complete
+    assert done.wait(5.0) and pv.put_complete
+    pv.disconnect()
+    ca.purge_channel_caches()
+
+
+def test_pv_put_callback_is_called_when_the_circuit_drops(ioc2):
+    from repics.pv import PV
+
+    done = threading.Event()
+    pv = PV(ioc2.prefix + "slow.A")
+    assert pv.wait_for_connection(5.0)
+    threading.Timer(0.3, ioc2.stop).start()
+    with pytest.raises(repics.CaDisconnected):
+        pv.put(1, wait=True, timeout=5.0, callback=lambda **kw: done.set())
+    assert done.is_set() and pv.put_complete
+    pv.disconnect()
+    ca.purge_channel_caches()
+
+
 def test_aio_caget_caput(ioc):
     async def main():
         await aio.caput(ioc + "ao", 1.25, wait=True)

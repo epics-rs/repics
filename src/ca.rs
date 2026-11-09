@@ -16,6 +16,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use epics_base_rs::server::snapshot::Snapshot as RsSnapshot;
+use epics_base_rs::types::{EpicsValue, PvString};
 use epics_ca_rs::client::{
     CaChannel as RsChannel, CaClient, ChannelInfo as RsChannelInfo,
     ConnectionEvent as RsConnectionEvent, EnumReadback, MonitorHandle, ReqCount,
@@ -92,6 +93,25 @@ async fn ensure_connected(ch: &RsChannel, op: CaOp, connect_timeout: Option<f64>
     } else {
         Err(access_denied(op))
     }
+}
+
+/// A sent write's completion: the server's status or a disconnect, with no
+/// deadline, as libca's put callback has none.
+type PutReply = Pin<Box<dyn Future<Output = CaResult<()>> + Send>>;
+
+/// Send `req` as `ca_array_put_callback` does. An error means nothing was
+/// sent; a Python string goes as DBR_STRING so the server converts it.
+fn send_put_notify(ch: &RsChannel, req: PutRequest) -> CaResult<PutReply> {
+    Ok(match req {
+        PutRequest::Str(s) => {
+            Box::pin(ch.put_as_dbr_callback(DBR_STRING_BASE, &EpicsValue::String(s.into()))?)
+        }
+        PutRequest::StrArray(a) => Box::pin(ch.put_as_dbr_callback(
+            DBR_STRING_BASE,
+            &EpicsValue::StringArray(a.into_iter().map(PvString::from).collect()),
+        )?),
+        PutRequest::Value(v) => Box::pin(ch.put_callback(&v)?),
+    })
 }
 
 /// The element cap a monitor asks for, same convention as [`read_count`].
@@ -733,17 +753,14 @@ impl CaChannel {
     ) -> PyResult<()> {
         bounded(timeout, async {
             ensure_connected(&ch, CaOp::Write, connect_timeout).await?;
-            match (req, wait) {
-                (PutRequest::Str(s), true) => ch.put_string(&s, duration_or_forever(None)).await,
-                (PutRequest::Str(s), false) => ch.put_string_nowait(&s).await,
-                (PutRequest::StrArray(a), true) => {
-                    ch.put_string_array(&a, duration_or_forever(None)).await
-                }
-                (PutRequest::StrArray(a), false) => ch.put_string_array_nowait(&a).await,
-                (PutRequest::Value(v), true) => {
-                    ch.put_with_timeout(&v, duration_or_forever(None)).await
-                }
-                (PutRequest::Value(v), false) => ch.put_nowait(&v).await,
+            if wait {
+                let reply = send_put_notify(&ch, req).map_err(map_ca_write)?;
+                return reply.await.map_err(map_ca_write);
+            }
+            match req {
+                PutRequest::Str(s) => ch.put_string_nowait(&s).await,
+                PutRequest::StrArray(a) => ch.put_string_array_nowait(&a).await,
+                PutRequest::Value(v) => ch.put_nowait(&v).await,
             }
             .map_err(map_ca_write)
         })
@@ -901,6 +918,31 @@ impl CaChannel {
         )
     }
 
+    /// Send the write as `ca_array_put_callback` and return its pending
+    /// completion. Raises if nothing was sent; `timeout` bounds connecting
+    /// and sending, `connect_timeout` the connect alone.
+    #[pyo3(signature = (value, timeout=None, connect_timeout=None))]
+    fn put_notify(
+        &self,
+        py: Python<'_>,
+        value: &Bound<'_, PyAny>,
+        timeout: Option<f64>,
+        connect_timeout: Option<f64>,
+    ) -> PyResult<CaPutNotify> {
+        let req = value::from_py(value)?;
+        let ch = self.inner.clone();
+        let reply = block_on(
+            py,
+            bounded(timeout, async move {
+                ensure_connected(&ch, CaOp::Write, connect_timeout).await?;
+                send_put_notify(&ch, req).map_err(map_ca_write)
+            }),
+        )?;
+        Ok(CaPutNotify {
+            reply: std::sync::Mutex::new(Some(reply)),
+        })
+    }
+
     #[pyo3(signature = (value, wait=true, timeout=None, connect_timeout=None))]
     fn put_async<'py>(
         &self,
@@ -981,6 +1023,27 @@ impl CaChannel {
 
     fn __repr__(&self) -> String {
         format!("CaChannel({:?}, connected={})", self.name, self.connected())
+    }
+}
+
+/// A write `CaChannel.put_notify` has sent.
+#[pyclass(frozen, module = "repics._repics")]
+pub struct CaPutNotify {
+    reply: std::sync::Mutex<Option<PutReply>>,
+}
+
+#[pymethods]
+impl CaPutNotify {
+    /// Block until the server reports the write processed or failed, or
+    /// the circuit drops; raises on failure. Can be called once.
+    fn wait(&self, py: Python<'_>) -> PyResult<()> {
+        let reply = self
+            .reply
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or_else(|| CaError::new_err(("put completion already waited for", ECA_INTERNAL)))?;
+        block_on(py, reply).map_err(map_ca_write)
     }
 }
 

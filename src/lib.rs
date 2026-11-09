@@ -42,6 +42,7 @@ fn _repics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("CaDisconnected", py.get_type::<error::CaDisconnected>())?;
     m.add_class::<ca::CaContext>()?;
     m.add_class::<ca::CaChannel>()?;
+    m.add_class::<ca::CaPutNotify>()?;
     m.add_class::<ca::CaSubscription>()?;
     m.add_class::<ca::CaEvents>()?;
     m.add_class::<ca::ConnectionEvent>()?;

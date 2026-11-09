@@ -19,8 +19,10 @@ from typing import Any, Callable
 import numpy
 
 from . import ca
-from ._context import channel
-from ._dbr import DBR_CHAR, DBR_ENUM, _DATATYPE_STRINGS
+from ._context import Deadline, channel, note_connected
+from ._dbr import DBR_CHAR, DBR_ENUM, ECA_TIMEOUT, _DATATYPE_STRINGS
+from ._ops import put_value
+from ._repics import CaError, CaTimeout
 from ._value import CaNothing
 
 __all__ = ["PV", "get_pv"]
@@ -217,27 +219,46 @@ class PV:
         callback: Callable[..., Any] | None = None,
         callback_data: Any = None,
     ) -> None:
-        """Write. ``wait=True`` returns after processing; ``callback`` runs
-        after processing on a helper thread (``callback(pvname=, data=)``).
-        ``timeout`` bounds the write, connecting included; the connect
-        itself waits as ``wait_for_connection()`` does, so even with
-        ``timeout=None`` a PV that does not connect fails then."""
+        """Write. ``wait=True`` returns after processing and raises if the
+        server failed it. ``timeout`` bounds the write, connecting included;
+        the connect itself waits as ``wait_for_connection()`` does, so even
+        with ``timeout=None`` a PV that does not connect fails then.
+
+        A write that cannot be sent raises. Once sent, ``callback(pvname=,
+        data=)`` runs on a helper thread when the server answers, success
+        or failure, as libca calls a put callback; that can be after
+        ``timeout`` has passed."""
         connect = self._connect_timeout()
         if callback is None and not use_complete:
             ca.caput(self.pvname, value, wait=wait, timeout=timeout, connect_timeout=connect)
             return
+        deadline = Deadline(timeout)
         self.put_complete = False
+        sent = channel(self.pvname).put_notify(
+            put_value(value, None), timeout=deadline.remaining(), connect_timeout=connect
+        )
+        note_connected(self.pvname)
+        failed: list[CaError] = []
+        finished = threading.Event()
 
-        def done() -> None:
-            ca.caput(self.pvname, value, wait=True, timeout=timeout, connect_timeout=connect)
-            self.put_complete = True
-            if callback is not None:
-                callback(pvname=self.pvname, data=callback_data)
+        def complete() -> None:
+            try:
+                sent.wait()
+            except CaError as e:
+                failed.append(e)
+            try:
+                self.put_complete = True
+                if callback is not None:
+                    callback(pvname=self.pvname, data=callback_data)
+            finally:
+                finished.set()
 
+        threading.Thread(target=complete, name=f"caput {self.pvname}", daemon=True).start()
         if wait:
-            done()
-        else:
-            threading.Thread(target=done, name=f"caput {self.pvname}", daemon=True).start()
+            if not finished.wait(deadline.remaining()):
+                raise CaTimeout(f"timed out after {timeout} s", ECA_TIMEOUT)
+            if failed:
+                raise failed[0]
 
     @property
     def value(self) -> Any:

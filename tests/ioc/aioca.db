@@ -60,3 +60,8 @@ record(seq, "$(P)seq") {
 record(longout, "$(P)seqout") {
   field(PINI, "YES")
 }
+
+record(calcout, "$(P)slow") {
+  field(CALC, "A")
+  field(ODLY, "2")
+}

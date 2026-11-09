@@ -24,7 +24,7 @@ libraries.
 | --- | --- |
 | `auto_monitor` | `None` monitors when the element count is at most `AUTOMONITOR_MAXLENGTH` (65536); `True`/`False` force it; an int is a DBE mask |
 | `get(use_monitor=True)` | returns the cached monitor value when monitoring; otherwise performs a `caget` in the PV's form. A failure raises; there is no `None` return |
-| `put(wait=False, timeout=30.0, use_complete=False, callback=None)` | a `callback` or `use_complete` without `wait` runs the put on a thread named `caput <pvname>`; `put_complete` goes `False` then `True`. A PV that does not connect within `connection_timeout` (else 5.0 s) raises `CaTimeout`, whatever `timeout` is |
+| `put(wait=False, timeout=30.0, use_complete=False, callback=None)` | with a `callback` or `use_complete`, the write is sent in the call and a thread named `caput <pvname>` sets `put_complete` to `True` and runs the callback when the server answers, also when it fails the write, as in pyepics. A write that cannot be sent raises instead of returning `None`. A PV that does not connect within `connection_timeout` (else 5.0 s) raises `CaTimeout`, whatever `timeout` is |
 | `disconnect()` | closes the subscription only; the channel stays connected and `connected` stays `True` |
 | `wait_for_connection(timeout=None)` | uses `connection_timeout`, else 5.0 s |
 | `add_callback(callback, index=None, run_now=False, with_ctrlvars=True, **kw)` | callbacks receive `pvname=`, `value=`, `char_value=`, `cb_info=(index, pv)` and the metadata keywords listed in [pv.md](pv.md) |
