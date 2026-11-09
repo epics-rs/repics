@@ -216,6 +216,18 @@ def test_pv_put_callback_is_called_when_the_server_fails_the_write(ioc):
     pv.disconnect()
 
 
+def test_pv_put_callback_takes_a_dict_callback_data_as_keywords(ioc):
+    # pyepics ca.put: a dict is the keywords, anything else is data=.
+    from repics.pv import PV
+
+    calls = []
+    pv = PV(ioc + "ao")
+    pv.put(1.5, wait=True, callback=lambda **kw: calls.append(kw), callback_data={"tag": 3})
+    pv.put(0.0, wait=True, callback=lambda **kw: calls.append(kw))
+    assert calls == [{"pvname": ioc + "ao", "tag": 3}, {"pvname": ioc + "ao", "data": None}]
+    pv.disconnect()
+
+
 def test_pv_put_callback_runs_after_the_callers_timeout(ioc2):
     from repics.pv import PV
 

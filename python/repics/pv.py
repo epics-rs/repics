@@ -225,8 +225,9 @@ class PV:
         with ``timeout=None`` a PV that does not connect fails then.
 
         A write that cannot be sent raises. Once sent, ``callback(pvname=,
-        data=)`` runs on a helper thread when the server answers, success
-        or failure, as libca calls a put callback; that can be after
+        data=callback_data)``, or with a dict ``callback(pvname=,
+        **callback_data)``, runs on a helper thread when the server answers,
+        success or failure, as libca calls a put callback; that can be after
         ``timeout`` has passed."""
         connect = self._connect_timeout()
         deadline = Deadline(timeout)
@@ -259,7 +260,8 @@ class PV:
             try:
                 self.put_complete = True
                 if callback is not None:
-                    callback(pvname=self.pvname, data=callback_data)
+                    kw = callback_data if isinstance(callback_data, dict) else {"data": callback_data}
+                    callback(pvname=self.pvname, **kw)
             finally:
                 finished.set()
 
