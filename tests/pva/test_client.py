@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from repics import PvaError, PvaRemoteError, PvaTimeout
+from repics import PvaRemoteError, PvaTimeout
 from repics.pva import Context, Disconnected, Value
 from repics.pva.nt import NTURI
 
