@@ -8,8 +8,9 @@
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use epics_pva_rs::PvaError as RsPvaError;
 use epics_pva_rs::client_native::ops_v2::{self, MarkedRead, PutLeaf};
 use epics_pva_rs::client_native::{PvaClient, PvaClientBuilder};
 use epics_pva_rs::config::parse_endpoints_with_port;
@@ -23,7 +24,7 @@ use pyo3::types::PyList;
 
 use super::error::{PvaError, bounded, map_pva};
 use super::value::{Type, Value};
-use crate::runtime::{block_on, into_py_future, join_all, results_to_py};
+use crate::runtime::{block_on, into_py_future, join_all, results_to_py, results_to_py_owned};
 
 /// Ops carry their own deadline (`bounded`), so the client's internal
 /// op-timeout only has to be long enough never to fire first.
@@ -132,6 +133,34 @@ impl PvaContext {
     pub(super) fn client(&self) -> Arc<PvaClient> {
         self.client.clone()
     }
+
+    /// One [`Self::do_put`] per entry, all against one deadline set now.
+    fn put_futs(
+        &self,
+        entries: Vec<(String, Option<String>, bool)>,
+        build: Py<PyAny>,
+        timeout: Option<f64>,
+        connect_timeout: Option<f64>,
+    ) -> PyResult<Vec<impl Future<Output = PyResult<Option<bool>>> + Send + 'static>> {
+        let build = Arc::new(build);
+        let bounds = PutBounds::new(timeout, connect_timeout);
+        let mut futs = Vec::with_capacity(entries.len());
+        for (index, (name, request, fetch)) in entries.into_iter().enumerate() {
+            let req = parse_request(request.as_deref())?;
+            let put = Self::do_put(
+                self.client.clone(),
+                name,
+                req,
+                fetch,
+                build.clone(),
+                index,
+                bounds,
+            );
+            // `None` in the list, not an empty tuple
+            futs.push(async move { put.await.map(|()| None) });
+        }
+        Ok(futs)
+    }
 }
 
 impl PvaContext {
@@ -183,6 +212,40 @@ impl PvaContext {
             })
         })
         .await
+    }
+
+    /// One put from open to commit; `build(index, op)` returns the `Value`
+    /// to send through the opened op. A put whose circuit is lost before
+    /// its commit completes is opened again while `bounds` has time left.
+    async fn do_put(
+        client: Arc<PvaClient>,
+        name: String,
+        request: Option<PvRequestExpr>,
+        fetch: bool,
+        build: Arc<Py<PyAny>>,
+        index: usize,
+        bounds: PutBounds,
+    ) -> PyResult<()> {
+        loop {
+            let op = Self::do_put_begin(
+                client.clone(),
+                name.clone(),
+                request.clone(),
+                fetch,
+                bounds.open(),
+            )
+            .await?;
+            let (op, leaves) = build_put(&build, index, op)?;
+            let sent = bounded(bounds.left(), async {
+                Ok(op.commit_fields_typed(&leaves).await)
+            })
+            .await?;
+            match sent {
+                Ok(()) => return Ok(()),
+                Err(RsPvaError::Disconnected) if !bounds.passed() => continue,
+                Err(e) => return Err(map_pva(e)),
+            }
+        }
     }
 
     async fn do_rpc(
@@ -301,72 +364,40 @@ impl PvaContext {
         results_to_py(py, results)
     }
 
-    /// Open a put on every name concurrently, each with its own `request`
-    /// and `fetch` (read the current value on the put's own operation). One
-    /// entry per name: a [`PutOp`] or the exception.
-    #[pyo3(signature = (names, requests, fetch, timeout=None))]
-    fn put_begin_many<'py>(
+    /// Put every `(name, request, fetch)` entry concurrently, each on its
+    /// own from open to commit, so a slow entry never eats into another's
+    /// time. `fetch` reads the current value on the put's own operation;
+    /// `build(index, op)` returns the `Value` to send. `timeout` bounds each
+    /// put, `connect_timeout` each opening of it (connect and INIT, before
+    /// any value is sent). One entry per name: `None` or the exception.
+    #[pyo3(signature = (entries, build, timeout=None, connect_timeout=None))]
+    fn put_many<'py>(
         &self,
         py: Python<'py>,
-        names: Vec<String>,
-        requests: Vec<Option<String>>,
-        fetch: Vec<bool>,
+        entries: Vec<(String, Option<String>, bool)>,
+        build: Py<PyAny>,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyList>> {
-        if names.len() != requests.len() || names.len() != fetch.len() {
-            return Err(PyValueError::new_err(format!(
-                "{} names need {} requests and fetch flags, got {} and {}",
-                names.len(),
-                names.len(),
-                requests.len(),
-                fetch.len()
-            )));
-        }
-        let mut futs = Vec::with_capacity(names.len());
-        for ((name, request), fetch) in names.into_iter().zip(requests).zip(fetch) {
-            let req = parse_request(request.as_deref())?;
-            futs.push(Self::do_put_begin(
-                self.client.clone(),
-                name,
-                req,
-                fetch,
-                timeout,
-            ));
-        }
+        let futs = self.put_futs(entries, build, timeout, connect_timeout)?;
         let results = block_on(py, join_all(futs, join_error));
         results_to_py(py, results)
     }
 
-    /// Commit every `(op, value)` pair concurrently. One entry per op:
-    /// `None` on success, else the exception.
-    #[pyo3(signature = (ops, values, timeout=None))]
-    fn put_commit_many<'py>(
+    /// [`Self::put_many`] as an asyncio awaitable.
+    #[pyo3(signature = (entries, build, timeout=None, connect_timeout=None))]
+    fn put_many_async<'py>(
         &self,
         py: Python<'py>,
-        ops: Vec<PyRef<'py, PutOp>>,
-        values: Vec<PyRef<'py, Value>>,
+        entries: Vec<(String, Option<String>, bool)>,
+        build: Py<PyAny>,
         timeout: Option<f64>,
-    ) -> PyResult<Bound<'py, PyList>> {
-        if ops.len() != values.len() {
-            return Err(PyValueError::new_err(format!(
-                "{} ops need {} values, got {}",
-                ops.len(),
-                ops.len(),
-                values.len()
-            )));
-        }
-        let mut futs = Vec::with_capacity(ops.len());
-        for (op, value) in ops.iter().zip(&values) {
-            let op = op.take()?;
-            let leaves = put_leaves(value)?;
-            futs.push(async move {
-                PutOp::do_commit(op, leaves, timeout).await?;
-                // `None` in the list, not an empty tuple
-                Ok::<Option<bool>, PyErr>(None)
-            });
-        }
-        let results = block_on(py, join_all(futs, join_error));
-        results_to_py(py, results)
+        connect_timeout: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let futs = self.put_futs(entries, build, timeout, connect_timeout)?;
+        into_py_future(py, async move {
+            results_to_py_owned(join_all(futs, join_error).await)
+        })
     }
 
     #[pyo3(signature = (name, timeout=None))]
@@ -382,23 +413,6 @@ impl PvaContext {
         timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         into_py_future(py, Self::do_info(self.client.clone(), name, timeout))
-    }
-
-    /// Open a put on `name`; see [`PutOp`].
-    #[pyo3(signature = (name, request=None, fetch=true, timeout=None))]
-    fn put_begin_async<'py>(
-        &self,
-        py: Python<'py>,
-        name: String,
-        request: Option<&str>,
-        fetch: bool,
-        timeout: Option<f64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let req = parse_request(request)?;
-        into_py_future(
-            py,
-            Self::do_put_begin(self.client.clone(), name, req, fetch, timeout),
-        )
     }
 
     /// Call `name` with `value` as the argument; `None` for an empty reply.
@@ -463,15 +477,13 @@ impl PvaContext {
 // PutOp
 // ---------------------------------------------------------------------------
 
-/// A put between its two phases: opened (the server's type is known and,
-/// with `fetch`, the current value has been read on the same operation)
-/// and not yet committed. The value is built on the Python side from
-/// `type`/`current()` and sent by `commit`; an uncommitted op is destroyed
-/// when dropped.
+/// A put between its two phases, as `build` sees it: opened (the server's
+/// type is known and, with `fetch`, the current value has been read on the
+/// same operation) and not yet committed. The value `build` returns is
+/// sent through it.
 ///
-/// The circuit may be lost between the phases; `commit` then raises
-/// `PvaDisconnected` and the caller begins again (pvxs's non-autoExec
-/// rule, `clientget.cpp:380-404`).
+/// The circuit may be lost between the phases; the put is then opened
+/// again (pvxs's non-autoExec rule, `clientget.cpp:380-404`).
 #[pyclass(frozen, module = "repics._repics")]
 pub struct PutOp {
     ty: Arc<FieldDesc>,
@@ -487,17 +499,65 @@ impl PutOp {
             .take()
             .ok_or_else(|| PvaError::new_err("put already committed"))
     }
+}
 
-    async fn do_commit(
-        op: ops_v2::PutOp,
-        leaves: Vec<(String, PutLeaf)>,
-        timeout: Option<f64>,
-    ) -> PyResult<()> {
-        bounded(timeout, async {
-            op.commit_fields_typed(&leaves).await.map_err(map_pva)
-        })
-        .await
+/// How long one put may still take: `timeout` from when the call began,
+/// of which each opening gets at most `connect_timeout`.
+#[derive(Clone, Copy)]
+struct PutBounds {
+    deadline: Option<Instant>,
+    connect: Option<f64>,
+}
+
+impl PutBounds {
+    fn new(timeout: Option<f64>, connect_timeout: Option<f64>) -> Self {
+        // A timeout too large for an `Instant` is no deadline at all.
+        let deadline = timeout
+            .and_then(|t| Duration::try_from_secs_f64(t.max(0.0)).ok())
+            .and_then(|d| Instant::now().checked_add(d));
+        PutBounds {
+            deadline,
+            connect: connect_timeout,
+        }
     }
+
+    fn left(&self) -> Option<f64> {
+        self.deadline
+            .map(|d| d.saturating_duration_since(Instant::now()).as_secs_f64())
+    }
+
+    fn open(&self) -> Option<f64> {
+        match (self.left(), self.connect) {
+            (Some(left), Some(connect)) => Some(left.min(connect)),
+            (left, connect) => left.or(connect),
+        }
+    }
+
+    fn passed(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
+}
+
+/// Call `build(index, op)` for the value to send and take the op back to
+/// commit it. Attaches on the runtime worker, as the result conversion
+/// does: a hop to a blocking thread costs about 60 us a put.
+fn build_put(
+    build: &Py<PyAny>,
+    index: usize,
+    op: PutOp,
+) -> PyResult<(ops_v2::PutOp, Vec<(String, PutLeaf)>)> {
+    // SAFETY: a plain flag read; an async put can outlive the interpreter's
+    // shutdown wait.
+    if unsafe { pyo3::ffi::Py_IsInitialized() } == 0 {
+        return Err(PvaError::new_err("interpreter is shutting down"));
+    }
+    Python::attach(|py| {
+        let op = Py::new(py, op)?;
+        let value = build.call1(py, (index, op.clone_ref(py)))?;
+        let value: PyRef<'_, Value> = value.bind(py).extract()?;
+        let leaves = put_leaves(&value)?;
+        Ok((op.get().take()?, leaves))
+    })
 }
 
 #[pymethods]
@@ -516,19 +576,6 @@ impl PutOp {
             .unwrap()
             .take()
             .map(|(field, marks)| Value::from_parts(self.ty.clone(), field, marks))
-    }
-
-    /// Send the marked fields of `value` and wait for the server's status.
-    #[pyo3(signature = (value, timeout=None))]
-    fn commit_async<'py>(
-        &self,
-        py: Python<'py>,
-        value: &Value,
-        timeout: Option<f64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let op = self.take()?;
-        let leaves = put_leaves(value)?;
-        into_py_future(py, Self::do_commit(op, leaves, timeout))
     }
 }
 

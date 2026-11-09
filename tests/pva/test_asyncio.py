@@ -368,6 +368,21 @@ def test_client_missing_pv_timeout_is_bounded(p4p_pvs, p4p_conf, pvname):
     asyncio.run(main())
 
 
+def test_client_put_connect_timeout_bounds_an_unbounded_put(p4p_pvs, p4p_conf, pvname):
+    async def main():
+        async with Context("pva", conf=p4p_conf, useenv=False) as C:
+            t0 = time.monotonic()
+            with pytest.raises(PvaTimeout):
+                await C.put(pvname("nope"), 1, timeout=None, connect_timeout=0.3)
+            assert time.monotonic() - t0 < 2.0
+            t0 = time.monotonic()
+            with pytest.raises(PvaTimeout):
+                await C.put(pvname("nope"), 1, timeout=0.3, connect_timeout=30.0)
+            assert time.monotonic() - t0 < 2.0
+
+    asyncio.run(main())
+
+
 def test_client_sync_context_manager(p4p_pvs, p4p_conf, pvname):
     async def main():
         with Context("pva", conf=p4p_conf, useenv=False) as C:

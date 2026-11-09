@@ -53,14 +53,14 @@ and the result is a list in the same order.
 | Method | Meaning |
 | --- | --- |
 | `get(name, request=None, timeout=5.0, throw=True)` | read. `name` may be a list; `request` is then one string for all or a list. Returns the unwrapped value (see [nt.md](nt.md)) or the `Value` when unwrapping is off or the id is unknown |
-| `put(name, values, request=None, timeout=5.0, throw=True, process=None, wait=None, get=True)` | write; see below |
+| `put(name, values, request=None, timeout=5.0, throw=True, process=None, wait=None, get=True, connect_timeout=None)` | write; see below |
 | `rpc(name, value, request=None, timeout=5.0, throw=True)` | call `name` with `value`, a `Value` (see `nt.NTURI`). The reply is unwrapped like a read |
 | `info(name, timeout=5.0)` | the server's `Type` for `name` |
 | `connect(name, timeout=5.0)` | wait until `name` is connected; returns the server address as `host:port` |
 | `monitor(name, cb, request=None, notify_disconnect=False, queue=None, limit=None)` | subscribe; see below. The asyncio flavour has no `queue` argument |
 
 In the asyncio flavour every method except `monitor` is a coroutine; list
-forms run through `asyncio.gather`.
+forms run concurrently.
 
 A name that never resolves raises `PvaTimeout` when the deadline passes.
 A server-side failure raises `PvaRemoteError`. A channel lost while an
@@ -85,6 +85,16 @@ length (else `ValueError`).
 `False` becomes `record[block=...]`; `process=None` leaves the server's
 default and `wait=None` sends `block=false`. They cannot be combined with an
 explicit `request` (`ValueError`).
+
+A put first opens the operation (connect, the server's INIT reply and, with
+`get=True`, the current value), then sends the value. `timeout` bounds the
+whole put; `connect_timeout` bounds each opening, so with `timeout=None,
+connect_timeout=2.0` a server that is down fails after 2 s instead of being
+written when it returns. A put whose circuit is lost between the two steps
+is opened again while `timeout` has not passed. The entries of a list are
+put concurrently, each on its own, so a slow entry does not shorten the
+others' time and a value that cannot be built fails only its own entry;
+with `throw=True` the first failure raises once every entry has finished.
 
 ### pvRequest strings
 

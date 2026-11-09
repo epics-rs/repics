@@ -4,7 +4,7 @@ Hand-written from the pyo3 surface in `src/`; `tests/test_stubs.py`
 checks every name, member and parameter list against the built module.
 """
 
-from collections.abc import Awaitable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
 __version__: str
@@ -326,21 +326,22 @@ class PvaContext:
     def get_many(
         self, names: Sequence[str], requests: Sequence[str | None], timeout: float | None = None
     ) -> list[Value | BaseException]: ...
-    def put_begin_many(
+    def put_many(
         self,
-        names: Sequence[str],
-        requests: Sequence[str | None],
-        fetch: Sequence[bool],
+        entries: Sequence[tuple[str, str | None, bool]],
+        build: Callable[[int, PutOp], Value],
         timeout: float | None = None,
-    ) -> list[PutOp | BaseException]: ...
-    def put_commit_many(
-        self, ops: Sequence[PutOp], values: Sequence[Value], timeout: float | None = None
+        connect_timeout: float | None = None,
     ) -> list[BaseException | None]: ...
+    def put_many_async(
+        self,
+        entries: Sequence[tuple[str, str | None, bool]],
+        build: Callable[[int, PutOp], Value],
+        timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ) -> Awaitable[list[BaseException | None]]: ...
     def info(self, name: str, timeout: float | None = None) -> Type: ...
     def info_async(self, name: str, timeout: float | None = None) -> Awaitable[Type]: ...
-    def put_begin_async(
-        self, name: str, request: str | None = None, fetch: bool = True, timeout: float | None = None
-    ) -> Awaitable[PutOp]: ...
     def rpc(
         self, name: str, value: Value, request: str | None = None, timeout: float | None = None
     ) -> Value | None: ...
@@ -352,15 +353,14 @@ class PvaContext:
     def close(self) -> None: ...
 
 class PutOp:
-    """A put between its two phases: opened on the server (its type known,
-    the current value read on the same operation when begun with `fetch`)
-    and not yet committed. Dropped uncommitted, it is destroyed.
+    """A put between its two phases, as `build` sees it: opened on the
+    server (its type known, the current value read on the same operation
+    when the entry asks to `fetch`) and not yet committed.
     """
 
     @property
     def type(self) -> Type: ...
     def current(self) -> Value | None: ...
-    def commit_async(self, value: Value, timeout: float | None = None) -> Awaitable[None]: ...
 
 class PvaMonitorHub:
     """One queue fed by every PVA monitor opened through it.

@@ -114,6 +114,19 @@ def test_put_list_mixes_values_and_bare_values(ctxt):
         ctxt.put([name("integer"), name("scalar")], [1])
 
 
+def test_put_list_value_that_cannot_be_built_fails_only_its_entry(ctxt):
+    try:
+        got = ctxt.put([name("integer"), name("scalar")], ["abc", 2.5], throw=False)
+        assert isinstance(got[0], ValueError)
+        assert got[1] is None
+        assert ctxt.get([name("integer"), name("scalar")]) == [7, 2.5]
+        with pytest.raises(ValueError):
+            ctxt.put([name("integer"), name("scalar")], ["abc", 3.5])
+        assert ctxt.get(name("scalar")) == 3.5
+    finally:
+        ctxt.put(name("scalar"), 1.5)
+
+
 def test_put_list_reports_each_entry(ctxt):
     # an entry that fails while its current value is read, one the handler
     # refuses, and one that succeeds, in one call
@@ -183,23 +196,28 @@ def test_put_get_false_builds_from_the_put_type(ctxt, p4p_pvs):
 
 
 def test_put_op_reads_back_on_the_put_operation(ctxt):
-    # the raw two-phase op: the readback comes with the open op, once
-    (op,) = ctxt._raw.put_begin_many([name("scalar")], [None], [True])
-    assert "alarm" in op.type.keys()
-    cur = op.current()
-    assert cur.value == 1.5
-    assert op.current() is None
-    cur.unmark()
-    cur.value = 2.0
-    assert ctxt._raw.put_commit_many([op], [cur]) == [None]
+    # the raw op handed to build: the readback comes with the open op, once
+    seen = []
+
+    def build(i, op):
+        cur = op.current()
+        seen.append((i, "alarm" in op.type.keys(), cur.value, op.current()))
+        cur.unmark()
+        cur.value = 2.0
+        return cur
+
+    assert ctxt._raw.put_many([(name("scalar"), None, True)], build) == [None]
+    assert seen == [(0, True, 1.5, None)]
     assert ctxt.get(name("scalar")) == 2.0
-    with pytest.raises(PvaError, match="already committed"):
-        ctxt._raw.put_commit_many([op], [cur])
-    (op,) = ctxt._raw.put_begin_many([name("scalar")], [None], [False])
-    assert op.current() is None
-    V = Value(op.type)
-    V.value = 1.5
-    assert ctxt._raw.put_commit_many([op], [V]) == [None]
+
+    def build(i, op):
+        seen.append(op.current())
+        V = Value(op.type)
+        V.value = 1.5
+        return V
+
+    assert ctxt._raw.put_many([(name("scalar"), None, False)], build) == [None]
+    assert seen[1:] == [None]
     assert ctxt.get(name("scalar")) == 1.5
 
 
@@ -340,6 +358,53 @@ def test_missing_pv_times_out(ctxt):
     assert time.monotonic() - t0 < 2.0
     err = ctxt.get(name("nope"), timeout=0.3, throw=False)
     assert isinstance(err, PvaTimeout)
+
+
+def test_put_connect_timeout_bounds_an_unbounded_put(ctxt):
+    t0 = time.monotonic()
+    with pytest.raises(PvaTimeout):
+        ctxt.put(name("nope"), 1, timeout=None, connect_timeout=0.3)
+    assert time.monotonic() - t0 < 2.0
+    got = ctxt.put([name("nope"), name("integer")], [1, 7], timeout=None, connect_timeout=0.3, throw=False)
+    assert isinstance(got[0], PvaTimeout)
+    assert got[1] is None
+
+
+def test_put_timeout_bounds_the_opening_too(ctxt):
+    t0 = time.monotonic()
+    with pytest.raises(PvaTimeout):
+        ctxt.put(name("nope"), 1, timeout=0.3, connect_timeout=30.0)
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_put_while_the_server_is_down_fails_at_the_connect_bound_and_is_never_sent():
+    from p4p.nt import NTScalar
+    from p4p.server import Server
+    from p4p.server.thread import SharedPV
+
+    class Store:
+        def put(self, pv, op):
+            pv.post(op.value().raw)
+            op.done()
+
+    pv = SharedPV(handler=Store(), nt=NTScalar("i"), initial=7)
+    providers = [{"repics-pva-drop:x": pv}]
+    S = Server(providers=providers, isolate=True)
+    conf = S.conf()  # the restart reuses these ports, so the client finds it again
+    try:
+        with Context("pva", conf=conf, useenv=False) as C:
+            C.put("repics-pva-drop:x", 8)
+            S.stop()
+            t0 = time.monotonic()
+            with pytest.raises(PvaTimeout):
+                C.put("repics-pva-drop:x", 77, timeout=None, connect_timeout=0.3)
+            assert time.monotonic() - t0 < 2.0
+            S = Server(providers=providers, conf=conf, useenv=False)
+            assert C.get("repics-pva-drop:x", timeout=10.0) == 8
+            time.sleep(0.5)
+            assert pv.current() == 8
+    finally:
+        S.stop()
 
 
 def test_connect(ctxt):

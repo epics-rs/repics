@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import time
 import weakref
 from typing import Any, Callable
 
-from .._repics import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, Type, Value
+from .._repics import PvaContext, PvaError, PvaMonitorHub, Type, Value
 from .._monitor import LoopDispatcher, per_loop
-from ._common import Wrapping, effective_conf, put_request
+from ._common import Wrapping, effective_conf, put_plan, settle_puts
 from ._common import log as _log
 from ._monitor import SubscriptionBase
 
@@ -125,36 +124,19 @@ class Context:
         process: Any = None,
         wait: bool | None = None,
         get: bool = True,
+        connect_timeout: float | None = None,
     ) -> Any:
+        """Write; see ``repics.pva.Context.put`` for the arguments."""
         if _is_list(name):
             if not _is_list(values) or len(values) != len(name):
                 raise ValueError(f"{len(name)} PVs need a list of {len(name)} values")
-            reqs = request if _is_list(request) else [request] * len(name)
-            return await asyncio.gather(
-                *(self.put(n, v, r, timeout, throw, process, wait, get) for n, v, r in zip(name, values, reqs))
-            )
-
-        async def one() -> None:
-            req = put_request(request, process, wait)
-            fetch = get and not isinstance(values, Value)
-            deadline = None if timeout is None else time.monotonic() + timeout
-            while True:
-                op = await self._raw.put_begin_async(name, req, fetch, timeout)
-                if isinstance(values, Value):
-                    V = values
-                else:
-                    cur = op.current()
-                    V = self._wrapping.assign(Value(op.type) if cur is None else cur, values)
-                try:
-                    await op.commit_async(V, timeout)
-                except PvaDisconnected:
-                    # The circuit was lost between the two phases: begin again.
-                    if deadline is not None and time.monotonic() >= deadline:
-                        raise
-                    continue
-                return
-
-        return await self._one(one(), throw)
+            names, vals = list(name), list(values)
+            reqs = list(request) if _is_list(request) else [request] * len(names)
+        else:
+            names, vals, reqs = [name], [values], [request]
+        entries, build = put_plan(self._wrapping, names, vals, reqs, process, wait, get)
+        results = settle_puts(await self._raw.put_many_async(entries, build, timeout, connect_timeout), throw)
+        return results if _is_list(name) else results[0]
 
     async def rpc(self, name: str, value: Value, request: Any = None, timeout: float | None = 5.0, throw: bool = True) -> Any:
         async def one() -> Any:

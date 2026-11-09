@@ -15,13 +15,23 @@ the Normative Type helpers, ``repics.pva.server`` the server side.
 
 from __future__ import annotations
 
-import time
 from typing import Any, Callable
 
 from .._repics import PvaContext, PvaDisconnected, PvaError, PvaMonitorHub, PvaRemoteError, PvaTimeout, Type, Value
 from .._monitor import ThreadDispatcher
 from . import nt
-from ._common import Cancelled, Disconnected, Finished, RemoteError, TimeoutError, Wrapping, dispatch, effective_conf, put_request
+from ._common import (
+    Cancelled,
+    Disconnected,
+    Finished,
+    RemoteError,
+    TimeoutError,
+    Wrapping,
+    dispatch,
+    effective_conf,
+    put_plan,
+    settle_puts,
+)
 from ._monitor import SubscriptionBase
 
 __all__ = [
@@ -147,6 +157,7 @@ class Context:
         process: Any = None,
         wait: bool | None = None,
         get: bool = True,
+        connect_timeout: float | None = None,
     ) -> Any:
         """Write ``values`` to ``name`` (or each pair of two lists).
 
@@ -156,65 +167,28 @@ class Context:
         helpers can see it (an NTEnum label resolves against the live
         choices); with ``get=False`` the value is built from the type the
         put operation reports.
+
+        A list is put concurrently, each entry on its own; with
+        ``throw=False`` a failed entry is its exception (a value that cannot
+        be built included), with ``throw=True`` the first one raises once
+        every entry has finished.
+
+        ``timeout`` bounds each put; ``connect_timeout`` bounds each opening
+        of it (connect and INIT, before any value is sent), so even with
+        ``timeout=None`` a server that is down fails then instead of being
+        written when it returns. A put whose circuit is lost between opening
+        and sending is opened again while ``timeout`` has not passed.
         """
         if _is_list(name):
             if not _is_list(values) or len(values) != len(name):
                 raise ValueError(f"{len(name)} PVs need a list of {len(name)} values")
-            reqs = request if _is_list(request) else [request] * len(name)
-            return self._put_many(list(name), list(values), list(reqs), timeout, throw, process, wait, get)
-        return self._put_many([name], [values], [request], timeout, throw, process, wait, get)[0]
-
-    def _put_many(
-        self,
-        names: list[str],
-        values: list[Any],
-        reqs: list[Any],
-        timeout: float | None,
-        throw: bool,
-        process: Any,
-        wait: bool | None,
-        get: bool,
-    ) -> list[Any]:
-        """``put`` over lists: every put is opened as one batch (reading the
-        current values on the puts themselves), the values are built, then
-        every write is committed as one batch. An entry that fails at either
-        step is that exception (``throw=False``) or raises (``throw=True``).
-        Each step waits at most ``timeout``. A put whose circuit is lost
-        between the two steps is begun again if ``timeout`` has not passed
-        since the call started."""
-        results: list[Any] = [None] * len(names)
-        req_strs = [put_request(r, process, wait) for r in reqs]
-        deadline = None if timeout is None else time.monotonic() + timeout
-        pending = list(range(len(names)))
-        while pending:
-            fetch = [get and not isinstance(values[i], Value) for i in pending]
-            ops = self._raw.put_begin_many([names[i] for i in pending], [req_strs[i] for i in pending], fetch, timeout)
-            ready: list[int] = []
-            ready_ops: list[Any] = []
-            ready_values: list[Value] = []
-            for i, op in zip(pending, ops):
-                if isinstance(op, BaseException):
-                    if throw:
-                        raise op
-                    results[i] = op
-                    continue
-                V = values[i]
-                if not isinstance(V, Value):
-                    cur = op.current()
-                    V = self._wrapping.assign(Value(op.type) if cur is None else cur, V)
-                ready.append(i)
-                ready_ops.append(op)
-                ready_values.append(V)
-            done = self._raw.put_commit_many(ready_ops, ready_values, timeout)
-            pending = []
-            for i, r in zip(ready, done):
-                if isinstance(r, PvaDisconnected) and (deadline is None or time.monotonic() < deadline):
-                    pending.append(i)
-                    continue
-                if isinstance(r, BaseException) and throw:
-                    raise r
-                results[i] = r
-        return results
+            names, vals = list(name), list(values)
+            reqs = list(request) if _is_list(request) else [request] * len(names)
+        else:
+            names, vals, reqs = [name], [values], [request]
+        entries, build = put_plan(self._wrapping, names, vals, reqs, process, wait, get)
+        results = settle_puts(self._raw.put_many(entries, build, timeout, connect_timeout), throw)
+        return results if _is_list(name) else results[0]
 
     def rpc(self, name: str, value: Value, request: Any = None, timeout: float | None = 5.0, throw: bool = True) -> Any:
         """Call ``name`` with argument ``value`` (a ``Value``, see ``nt.NTURI``)."""

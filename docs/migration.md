@@ -102,7 +102,7 @@ it in 4 runs.
 | `from p4p.server.asyncio import SharedPV` | `from repics.pva.server.asyncio import SharedPV` |
 | `from p4p.client.thread import Disconnected, RemoteError, TimeoutError` | `from repics.pva import Disconnected, RemoteError, TimeoutError` (aliases of `PvaDisconnected`, `PvaRemoteError`, `PvaTimeout`) |
 | `Context('pva', conf=..., useenv=..., nt=..., unwrap=...)` | the same arguments; `provider` must be `'pva'` |
-| `Context.get/put/rpc/info/connect/monitor` | the same signatures (see [pva-client.md](pva-client.md)) |
+| `Context.get/put/rpc/info/connect/monitor` | the same signatures (see [pva-client.md](pva-client.md)); `put` also takes `connect_timeout`, which bounds opening the put before the value is sent |
 | `Server(providers, isolate=, conf=, useenv=)` | the same; `Server.forever()` exists |
 | `SharedPV(handler=, initial=, nt=, wrap=, unwrap=, queue=)` | the same; `open`, `post`, `close(destroy=, sync=, timeout=)`, `current`, `isOpen`, the four decorators |
 | `Value` | `Type(spec, id=None)` accepts a member list or a `Type` at top level; `Type(T.aspy())` is not accepted (see [values.md](values.md)) |

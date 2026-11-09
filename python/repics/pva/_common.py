@@ -57,6 +57,32 @@ def put_request(request: str | None, process: Any, wait: bool | None) -> str | N
     return f"field()record[block={block},process={proc}]"
 
 
+def put_plan(
+    wrapping: Wrapping, names: list[str], values: list[Any], reqs: list[Any], process: Any, wait: bool | None, get: bool
+) -> tuple[list[tuple[str, str | None, bool]], Callable[[int, Any], Value]]:
+    """The ``(name, request, fetch)`` entries of a put and the
+    ``build(index, op)`` that makes each value from its opened op."""
+    entries = [(n, put_request(r, process, wait), get and not isinstance(v, Value)) for n, v, r in zip(names, values, reqs)]
+
+    def build(i: int, op: Any) -> Value:
+        V = values[i]
+        if isinstance(V, Value):
+            return V
+        cur = op.current()
+        return wrapping.assign(Value(op.type) if cur is None else cur, V)
+
+    return entries, build
+
+
+def settle_puts(results: list[Any], throw: bool) -> list[Any]:
+    """With ``throw``, raise the first failed entry."""
+    if throw:
+        for r in results:
+            if isinstance(r, BaseException):
+                raise r
+    return results
+
+
 def named(out: Any, name: str) -> Any:
     if isinstance(out, Augmented):
         out._snap.name = name
