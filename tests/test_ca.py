@@ -382,6 +382,26 @@ def test_pv_put_sends_a_str_to_a_char_array_as_its_bytes(ioc):
     s.disconnect()
 
 
+def test_put_takes_bytes_as_the_str_they_decode_to(ioc):
+    # pyepics and aioca put bytes as they put a str.
+    from repics.pv import PV
+
+    line = b"umv th 0.6; umv tth 1.2; ct 1; wa; p date()"
+    pv = PV(ioc + "line", auto_monitor=False)
+    pv.put(line, wait=True)
+    assert ca.caget(ioc + "line").tobytes() == line + b"\0"
+    pv.disconnect()
+    ca.caput(ioc + "str", b"plain", wait=True)
+    assert ca.caget(ioc + "str") == "plain"
+    ca.caput(ioc + "ao", b"1.5", wait=True)
+    assert ca.caget(ioc + "ao") == 1.5
+    with pytest.raises(UnicodeDecodeError):
+        ca.caput(ioc + "str", b"\xff", wait=True)
+    assert ca.caget(ioc + "str") == "plain"
+    ca.caput(ioc + "str", "hello", wait=True)
+    ca.caput(ioc + "ao", 0.0, wait=True)
+
+
 def test_count_conventions(ioc):
     ca.caput(ioc + "wf", numpy.arange(5.0), wait=True)
     assert len(ca.caget(ioc + "wf")) == 5  # autosize: the record's current count

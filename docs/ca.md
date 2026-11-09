@@ -70,7 +70,7 @@ value goes to every PV. A list of the wrong length raises `ValueError`.
 
 | `datatype` | `value` is sent as |
 | --- | --- |
-| `None` | `str` as a string, `int` as a long, `float` as a double, arrays as arrays |
+| `None` | `str` as a string, `bytes` as the string they decode to as UTF-8, `int` as a long, `float` as a double, arrays as arrays |
 | `DBR_CHAR_STR`, `DBR_CHAR_UNICODE` | a `uint8` array of the UTF-8 bytes plus a terminating NUL |
 | `DBR_CHAR_BYTES` | the bytes plus a terminating NUL |
 | `str`, `DBR_ENUM_STR` | `str(value)` |
@@ -418,7 +418,7 @@ Created by `CaContext.channel`. Dropping the last reference closes it.
 | `info()` | a `ChannelInfo`; raises `CaDisconnected` before connection |
 | `wait_connected(timeout=None)` | block until connected |
 | `get(dbr=None, form=0, enum_as_string=False, count=0, timeout=None)` | read, connecting first. `dbr` is a base code, `form` an offset from `form_offset`; returns a `Snapshot` |
-| `put(value, wait=True, timeout=None, connect_timeout=None, str_as_chars=False)` | write, connecting first; `wait=True` returns after the server has processed it. `timeout` bounds the whole call, `connect_timeout` its wait for the connection. A `str` goes as a `DBR_STRING` the server converts, as aioca sends it; `str_as_chars=True` sends it to a CHAR channel of more than one element as its UTF-8 bytes and a NUL, cut to the element count, as pyepics does |
+| `put(value, wait=True, timeout=None, connect_timeout=None, str_as_chars=False)` | write, connecting first; `wait=True` returns after the server has processed it. `timeout` bounds the whole call, `connect_timeout` its wait for the connection. A `str`, or `bytes` decoded as UTF-8, goes as a `DBR_STRING` the server converts, as aioca sends it; `str_as_chars=True` sends it to a CHAR channel of more than one element as its UTF-8 bytes and a NUL, cut to the element count, as pyepics does |
 | `subscribe(deadband=0.0, mask=None, enum_as_string=False, float_as_string=False, count=0)` | a `CaSubscription` |
 | `events()` | a `CaEvents` stream of lifecycle events from now on |
 

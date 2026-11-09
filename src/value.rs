@@ -5,11 +5,11 @@
 //! arrays become `list[str]`.
 //!
 //! Python → Rust: a `str` is a string put (the server converts, so menu
-//! labels work); `bool`/`int`/`float` become the widest scalar of their
-//! kind and `CaChannel::put` converts to the channel's native type; a
-//! 1-D numpy array of a supported dtype becomes the matching array
-//! variant; a list is a string array if every element is a `str`, else a
-//! `float64` array.
+//! labels work), and `bytes` the `str` they decode to as UTF-8;
+//! `bool`/`int`/`float` become the widest scalar of their kind and
+//! `CaChannel::put` converts to the channel's native type; a 1-D numpy
+//! array of a supported dtype becomes the matching array variant; a list
+//! is a string array if every element is a `str`, else a `float64` array.
 
 use std::ffi::CString;
 
@@ -19,7 +19,7 @@ use numpy::{Element, PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayM
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyCapsule, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyBytes, PyCapsule, PyFloat, PyInt, PyList, PyString};
 
 pub fn pv_string_to_py(py: Python<'_>, s: &PvString) -> PyResult<Py<PyAny>> {
     s.as_str_lossy().into_py_any(py)
@@ -99,6 +99,9 @@ pub enum PutRequest {
 pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<PutRequest> {
     if let Ok(s) = obj.cast::<PyString>() {
         return Ok(PutRequest::Str(s.to_cow()?.into_owned()));
+    }
+    if let Ok(b) = obj.cast::<PyBytes>() {
+        return Ok(PutRequest::Str(b.call_method0("decode")?.extract()?));
     }
     if let Ok(b) = obj.cast::<PyBool>() {
         return Ok(PutRequest::Value(EpicsValue::Long(b.is_true() as i32)));
