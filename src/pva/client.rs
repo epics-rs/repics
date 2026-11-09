@@ -483,7 +483,8 @@ impl PvaContext {
 /// sent through it.
 ///
 /// The circuit may be lost between the phases; the put is then opened
-/// again (pvxs's non-autoExec rule, `clientget.cpp:380-404`).
+/// again, as pvxs returns an op not yet executing to pending
+/// (`clientget.cpp:392-396`).
 #[pyclass(frozen, module = "repics._repics")]
 pub struct PutOp {
     ty: Arc<FieldDesc>,
