@@ -243,7 +243,7 @@ print(connect("demo:ai"), connect("demo:missing", timeout=0.5, throw=False))
 
 ```
 CaNothing('demo:missing', 80) False False True demo:missing: User specified timeout on IO operation expired
-CaTimeout 80 ('timed out after 0.4999932670034468 s', 80)
+CaTimeout 80 ('timed out after 0.5 s', 80)
 [1.5 <name='demo:ai', severity=0, status=0>, CaNothing('demo:missing', 80)]
 demo:ro: Channel write request failed
 demo:ai: Normal successful completion demo:missing: User specified timeout on IO operation expired

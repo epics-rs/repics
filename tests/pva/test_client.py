@@ -372,9 +372,10 @@ def test_put_connect_timeout_bounds_an_unbounded_put(ctxt):
 
 def test_put_timeout_bounds_the_opening_too(ctxt):
     t0 = time.monotonic()
-    with pytest.raises(PvaTimeout):
+    with pytest.raises(PvaTimeout) as ei:
         ctxt.put(name("nope"), 1, timeout=0.3, connect_timeout=30.0)
     assert time.monotonic() - t0 < 2.0
+    assert str(ei.value) == "timed out after 0.3 s"
 
 
 def test_put_while_the_server_is_down_fails_at_the_connect_bound_and_is_never_sent():

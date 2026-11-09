@@ -32,8 +32,15 @@ create_exception!(
     "The channel is not connected."
 );
 
+/// The message for a bound of `secs` that expired. The bound is what was left
+/// of the caller's deadline, a few microseconds short of it, so it is shown at
+/// the millisecond the timer works in: 0.2999974 s is "0.3 s".
+pub fn timed_out_after(secs: f64) -> String {
+    format!("timed out after {} s", (secs * 1000.0).round() / 1000.0)
+}
+
 pub fn timeout_err(secs: f64) -> PyErr {
-    CaTimeout::new_err((format!("timed out after {secs} s"), ECA_TIMEOUT))
+    CaTimeout::new_err((timed_out_after(secs), ECA_TIMEOUT))
 }
 
 /// libca refuses in `nciu::read`/`nciu::write` when the cached access

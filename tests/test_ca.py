@@ -134,9 +134,10 @@ def test_put_connect_timeout_bounds_an_unbounded_put(ioc):
 
 def test_put_timeout_bounds_the_connect_too(ioc):
     t0 = time.monotonic()
-    with pytest.raises(repics.CaTimeout, match="timed out after"):
+    with pytest.raises(repics.CaTimeout) as ei:
         ca.caput(ioc + "no-such-pv", 1, wait=True, timeout=0.3, connect_timeout=30.0)
     assert time.monotonic() - t0 < 2.0
+    assert ei.value.args[0] == "timed out after 0.3 s"
 
 
 def test_aio_put_connect_timeout_bounds_an_unbounded_put(ioc):

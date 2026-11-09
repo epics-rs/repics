@@ -8,6 +8,8 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
+use crate::error::timed_out_after;
+
 create_exception!(repics, PvaError, PyException, "pvAccess operation failed.");
 create_exception!(
     repics,
@@ -52,7 +54,7 @@ where
             let d = std::time::Duration::from_secs_f64(secs.max(0.0));
             match tokio::time::timeout(d, fut).await {
                 Ok(r) => r,
-                Err(_) => Err(PvaTimeout::new_err(format!("timed out after {secs} s"))),
+                Err(_) => Err(PvaTimeout::new_err(timed_out_after(secs))),
             }
         }
     }
