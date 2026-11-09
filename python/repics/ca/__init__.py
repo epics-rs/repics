@@ -109,24 +109,28 @@ def caput(
     timeout: Any = DEFAULT_TIMEOUT,
     repeat_value: bool = False,
     throw: bool = True,
+    connect_timeout: Any = None,
 ) -> Any:
     """Write each PV. With a sequence of PVs, ``value`` is repeated if it is a
     scalar or string (or ``repeat_value``), else zipped one per PV.
 
-    ``wait=True`` returns after the record has processed. Returns a
+    ``wait=True`` returns after the record has processed. ``timeout``
+    bounds the whole write, connecting included; ``connect_timeout``, in
+    the same forms, bounds the wait for the connection alone. Returns a
     ``CaNothing`` per PV, ``ok`` True on success.
     """
     remaining = Deadline(timeout).remaining()
+    connect = Deadline(connect_timeout).remaining()
     if is_single(pv):
         try:
-            channel(pv).put(put_value(value, datatype), wait=wait, timeout=remaining)  # type: ignore[arg-type]
+            channel(pv).put(put_value(value, datatype), wait=wait, timeout=remaining, connect_timeout=connect)  # type: ignore[arg-type]
         except CaError as e:
             return finish(pv, e, throw)  # type: ignore[arg-type]
         note_connected(pv)  # type: ignore[arg-type]
         return CaNothing(pv)  # type: ignore[arg-type]
     values = [put_value(v, datatype) for v in values_for(pv, value, repeat_value)]
     chs = [channel(n) for n in pv]
-    got = context().put_many(chs, values, wait, remaining)
+    got = context().put_many(chs, values, wait, remaining, connect)
     return collect(pv, got, throw)
 
 

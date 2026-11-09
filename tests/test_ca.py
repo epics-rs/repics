@@ -121,6 +121,63 @@ def test_missing_pv_times_out(ioc):
     assert time.monotonic() - t0 < 2.0
 
 
+def test_put_connect_timeout_bounds_an_unbounded_put(ioc):
+    missing = ioc + "no-such-pv"
+    t0 = time.monotonic()
+    with pytest.raises(repics.CaTimeout, match="channel not found"):
+        ca.caput(missing, 1, wait=True, timeout=None, connect_timeout=0.3)
+    rs = ca.caput([ioc + "ao", missing], [0.5, 1], wait=True, timeout=None, connect_timeout=0.3, throw=False)
+    assert rs[0].ok and not rs[1].ok
+    assert time.monotonic() - t0 < 2.0
+    assert ca.caget(ioc + "ao") == 0.5
+
+
+def test_put_timeout_bounds_the_connect_too(ioc):
+    t0 = time.monotonic()
+    with pytest.raises(repics.CaTimeout, match="timed out after"):
+        ca.caput(ioc + "no-such-pv", 1, wait=True, timeout=0.3, connect_timeout=30.0)
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_aio_put_connect_timeout_bounds_an_unbounded_put(ioc):
+    missing = ioc + "no-such-pv"
+
+    async def main():
+        with pytest.raises(repics.CaTimeout, match="channel not found"):
+            await aio.caput(missing, 1, wait=True, timeout=None, connect_timeout=0.3)
+        rs = await aio.caput([ioc + "ao", missing], [0.75, 1], wait=True, timeout=None, connect_timeout=0.3, throw=False)
+        assert rs[0].ok and not rs[1].ok
+
+    t0 = time.monotonic()
+    asyncio.run(main())
+    assert time.monotonic() - t0 < 2.0
+    assert ca.caget(ioc + "ao") == 0.75
+
+
+def test_pv_put_after_a_drop_fails_at_the_connect_bound_and_is_never_sent(ioc2):
+    from repics.pv import PV
+
+    name = ioc2.prefix + "longout"
+    pv = PV(name, connection_timeout=0.3)
+    assert pv.wait_for_connection(5.0)
+    ioc2.stop()
+    for _ in range(100):
+        if not pv.connected:
+            break
+        time.sleep(0.05)
+    assert not pv.connected
+    t0 = time.monotonic()
+    with pytest.raises(repics.CaTimeout, match="channel not found"):
+        pv.put(77, wait=True, timeout=None)
+    assert time.monotonic() - t0 < 2.0
+    ioc2.start()
+    assert pv.wait_for_connection(10.0)
+    time.sleep(0.5)
+    assert ca.caget(name, timeout=5.0) == 42
+    pv.disconnect()
+    ca.purge_channel_caches()
+
+
 def test_aio_caget_caput(ioc):
     async def main():
         await aio.caput(ioc + "ao", 1.25, wait=True)

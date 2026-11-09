@@ -49,12 +49,18 @@ asked for.
 ### caput
 
 ```python
-def caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True)
+def caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True,
+          connect_timeout=None)
 ```
 
 Write `value`. With `wait=True` the call returns after the server has
 processed the write (CA write-notify). Returns `CaNothing(pv)` on success
 (truthy); with `throw=False` a failure returns a falsy `CaNothing`.
+
+`timeout` bounds the whole write, connecting included. `connect_timeout`,
+in the same forms, bounds the wait for the connection alone: with
+`wait=True, timeout=None, connect_timeout=2.0` a PV that does not connect
+fails after 2 s instead of being written whenever it does.
 
 For a list of PVs, `value` is zipped with the names unless it is a scalar,
 `str`, `bytes`, non-iterable, or `repeat_value=True`, in which case the same
@@ -397,7 +403,7 @@ Configuration comes from the `EPICS_CA_*` environment at construction.
 | `connection_count()` | number of live IOC circuits |
 | `wait_connected_many(channels, timeout=None)` | wait for every channel concurrently; one entry per channel, `None` on success or the exception |
 | `get_many(channels, dbr=None, form=0, enum_as_string=False, count=0, timeout=None)` | read every channel concurrently, connecting first; one `Snapshot` or exception per channel |
-| `put_many(channels, values, wait=True, timeout=None)` | write every channel concurrently; `None` or the exception per channel |
+| `put_many(channels, values, wait=True, timeout=None, connect_timeout=None)` | write every channel concurrently, each bounded as `CaChannel.put`; `None` or the exception per channel |
 
 ### CaChannel
 
@@ -412,7 +418,7 @@ Created by `CaContext.channel`. Dropping the last reference closes it.
 | `info()` | a `ChannelInfo`; raises `CaDisconnected` before connection |
 | `wait_connected(timeout=None)` | block until connected |
 | `get(dbr=None, form=0, enum_as_string=False, count=0, timeout=None)` | read, connecting first. `dbr` is a base code, `form` an offset from `form_offset`; returns a `Snapshot` |
-| `put(value, wait=True, timeout=None)` | write; `wait=True` returns after the server has processed it |
+| `put(value, wait=True, timeout=None, connect_timeout=None)` | write, connecting first; `wait=True` returns after the server has processed it. `timeout` bounds the whole call, `connect_timeout` its wait for the connection |
 | `subscribe(deadband=0.0, mask=None, enum_as_string=False, float_as_string=False, count=0)` | a `CaSubscription` |
 | `events()` | a `CaEvents` stream of lifecycle events from now on |
 

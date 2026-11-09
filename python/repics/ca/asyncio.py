@@ -97,19 +97,23 @@ async def caput(
     timeout: Any = DEFAULT_TIMEOUT,
     repeat_value: bool = False,
     throw: bool = True,
+    connect_timeout: Any = None,
 ) -> Any:
     """Write each PV; see ``repics.ca.caput`` for the arguments."""
     remaining = Deadline(timeout).remaining()
+    connect = Deadline(connect_timeout).remaining()
     if is_single(pv):
         try:
-            await channel(pv).put_async(put_value(value, datatype), wait=wait, timeout=remaining)  # type: ignore[arg-type]
+            await channel(pv).put_async(
+                put_value(value, datatype), wait=wait, timeout=remaining, connect_timeout=connect
+            )  # type: ignore[arg-type]
         except CaError as e:
             return finish(pv, e, throw)  # type: ignore[arg-type]
         note_connected(pv)  # type: ignore[arg-type]
         return CaNothing(pv)  # type: ignore[arg-type]
     values = [put_value(v, datatype) for v in values_for(pv, value, repeat_value)]
     chs = [channel(n) for n in pv]
-    got = await context().put_many_async(chs, values, wait, remaining)
+    got = await context().put_many_async(chs, values, wait, remaining, connect)
     return collect(pv, got, throw)
 
 

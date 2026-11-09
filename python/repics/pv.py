@@ -150,11 +150,13 @@ class PV:
     def connect(self, timeout: float | None = None) -> bool:
         return self.wait_for_connection(timeout)
 
+    def _connect_timeout(self) -> float:
+        """How long a connect waits unless told: ``connection_timeout``, else 5 s."""
+        return self.connection_timeout if self.connection_timeout is not None else 5.0
+
     def wait_for_connection(self, timeout: float | None = None) -> bool:
         """True once connected; False if ``timeout`` (or ``connection_timeout``) passes."""
-        if timeout is None:
-            timeout = self.connection_timeout
-        r = ca.connect(self.pvname, timeout=timeout if timeout is not None else 5.0, throw=False)
+        r = ca.connect(self.pvname, timeout=timeout if timeout is not None else self._connect_timeout(), throw=False)
         return not (isinstance(r, CaNothing) and not r.ok)
 
     def disconnect(self) -> None:
@@ -210,20 +212,24 @@ class PV:
         self,
         value: Any,
         wait: bool = False,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
         use_complete: bool = False,
         callback: Callable[..., Any] | None = None,
         callback_data: Any = None,
     ) -> None:
         """Write. ``wait=True`` returns after processing; ``callback`` runs
-        after processing on a helper thread (``callback(pvname=, data=)``)."""
+        after processing on a helper thread (``callback(pvname=, data=)``).
+        ``timeout`` bounds the write, connecting included; the connect
+        itself waits as ``wait_for_connection()`` does, so even with
+        ``timeout=None`` a PV that does not connect fails then."""
+        connect = self._connect_timeout()
         if callback is None and not use_complete:
-            ca.caput(self.pvname, value, wait=wait, timeout=timeout)
+            ca.caput(self.pvname, value, wait=wait, timeout=timeout, connect_timeout=connect)
             return
         self.put_complete = False
 
         def done() -> None:
-            ca.caput(self.pvname, value, wait=True, timeout=timeout)
+            ca.caput(self.pvname, value, wait=True, timeout=timeout, connect_timeout=connect)
             self.put_complete = True
             if callback is not None:
                 callback(pvname=self.pvname, data=callback_data)

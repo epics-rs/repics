@@ -142,8 +142,12 @@ class CaChannel:
         count: int = 0,
         timeout: float | None = None,
     ) -> Awaitable[Snapshot]: ...
-    def put(self, value: Any, wait: bool = True, timeout: float | None = None) -> None: ...
-    def put_async(self, value: Any, wait: bool = True, timeout: float | None = None) -> Awaitable[None]: ...
+    def put(
+        self, value: Any, wait: bool = True, timeout: float | None = None, connect_timeout: float | None = None
+    ) -> None: ...
+    def put_async(
+        self, value: Any, wait: bool = True, timeout: float | None = None, connect_timeout: float | None = None
+    ) -> Awaitable[None]: ...
     def subscribe(
         self,
         deadband: float = 0.0,
@@ -214,6 +218,7 @@ class CaContext:
         values: Sequence[Any],
         wait: bool = True,
         timeout: float | None = None,
+        connect_timeout: float | None = None,
     ) -> list[BaseException | None]: ...
     def put_many_async(
         self,
@@ -221,6 +226,7 @@ class CaContext:
         values: Sequence[Any],
         wait: bool = True,
         timeout: float | None = None,
+        connect_timeout: float | None = None,
     ) -> Awaitable[list[BaseException | None]]: ...
 
 class MonitorHub:

@@ -22,7 +22,7 @@ class PV(pvname, callback=None, form='time', auto_monitor=None,
 | `form` | the metadata a read or monitor carries: `'time'` or `'ctrl'` (any `repics.ca` form is accepted) |
 | `auto_monitor` | `None` (the default) monitors channels of at most `AUTOMONITOR_MAXLENGTH` elements; `True` or `False` forces it on or off; an `int` that is not a `bool` is the DBE mask to monitor with |
 | `connection_callback` | called as `cb(pvname=, conn=, pv=)` on every connection and disconnection |
-| `connection_timeout` | the default for `wait_for_connection` |
+| `connection_timeout` | the default for `wait_for_connection`, and how long `put` waits for the connection; `None` means 5.0 s |
 | `access_callback` | called as `cb(read, write, pv=)` when the server changes access rights |
 | `count` | element count for reads and the monitor; `None` uses the server's valid count |
 
@@ -48,7 +48,7 @@ value before the callbacks run.
 | Member | Meaning |
 | --- | --- |
 | `get(count=None, as_string=False, as_numpy=True, timeout=None, use_monitor=True)` | the value. With `use_monitor=True`, `count=None` and a monitor that has delivered, the cached value, which is the last monitor update received and can trail a `put` that has already completed; otherwise a fresh `caget` in the PV's `form`. Raises `CaError` on failure. `as_string` renders as `char_value` does; `as_numpy=False` turns an array into a list |
-| `put(value, wait=False, timeout=30.0, use_complete=False, callback=None, callback_data=None)` | write. With `wait=True` it returns after the record has processed. With `callback` or `use_complete`, the write is done with wait on a daemon thread named `caput <pvname>` (or inline when `wait=True`), `put_complete` goes `False` then `True`, and `callback(pvname=, data=callback_data)` runs on that thread |
+| `put(value, wait=False, timeout=30.0, use_complete=False, callback=None, callback_data=None)` | write. With `wait=True` it returns after the record has processed. `timeout` bounds the write, connecting included; the connect itself waits at most `connection_timeout`, so a PV that does not connect fails then even with `timeout=None`. With `callback` or `use_complete`, the write is done with wait on a daemon thread named `caput <pvname>` (or inline when `wait=True`), `put_complete` goes `False` then `True`, and `callback(pvname=, data=callback_data)` runs on that thread |
 | `value` | property: `get()`; assigning calls `put()` |
 | `char_value` | the string rendering of the cached value, reading once if nothing is cached |
 | `get_ctrlvars(timeout=5.0)` | a fresh `ctrl` read; returns a dict of the keys below that the channel has |

@@ -13,7 +13,7 @@ libraries.
 | `epics.PV(...)` | `repics.pv.PV(pvname, callback=None, form='time', auto_monitor=None, connection_callback=None, connection_timeout=None, access_callback=None, count=None)` |
 | `epics.get_pv(...)` | `repics.pv.get_pv(pvname, form='time', connect=False, timeout=5.0, **kw)`; the cache is keyed by `(pvname, form)` and holds only PVs made through `get_pv` |
 | `epics.caget(...)` | `repics.ca.caget(pv, form='time', datatype=None, count=0, timeout=5.0, throw=True)`; returns an augmented value, not a bare Python number |
-| `epics.caput(...)` | `repics.ca.caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True)` |
+| `epics.caput(...)` | `repics.ca.caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True, connect_timeout=None)`; `timeout` bounds the whole write, connecting included, `connect_timeout` the connect alone |
 | `epics.camonitor(...)` | `repics.ca.camonitor(pv, callback, ...)` returns a subscription object with `close()`; there is no `camonitor_clear` |
 | `epics.cainfo(...)` | `repics.ca.cainfo(pv, wait=True, timeout=5.0, throw=True)` returns a `CAInfo` object instead of printing |
 | `epics.ca.*` | `repics.CaContext` and `repics.CaChannel` (see [ca.md](ca.md)); the pyepics `ca` module functions do not exist |
@@ -24,7 +24,7 @@ libraries.
 | --- | --- |
 | `auto_monitor` | `None` monitors when the element count is at most `AUTOMONITOR_MAXLENGTH` (65536); `True`/`False` force it; an int is a DBE mask |
 | `get(use_monitor=True)` | returns the cached monitor value when monitoring; otherwise performs a `caget` in the PV's form. A failure raises; there is no `None` return |
-| `put(wait=False, timeout=30.0, use_complete=False, callback=None)` | a `callback` or `use_complete` without `wait` runs the put on a thread named `caput <pvname>`; `put_complete` goes `False` then `True` |
+| `put(wait=False, timeout=30.0, use_complete=False, callback=None)` | a `callback` or `use_complete` without `wait` runs the put on a thread named `caput <pvname>`; `put_complete` goes `False` then `True`. A PV that does not connect within `connection_timeout` (else 5.0 s) raises `CaTimeout`, whatever `timeout` is |
 | `disconnect()` | closes the subscription only; the channel stays connected and `connected` stays `True` |
 | `wait_for_connection(timeout=None)` | uses `connection_timeout`, else 5.0 s |
 | `add_callback(callback, index=None, run_now=False, with_ctrlvars=True, **kw)` | callbacks receive `pvname=`, `value=`, `char_value=`, `cb_info=(index, pv)` and the metadata keywords listed in [pv.md](pv.md) |

@@ -69,14 +69,16 @@ struct GetRequest {
     enum_as_string: bool,
 }
 
-/// Wait for the channel to connect, then apply libca's access gate for
-/// `op` (`nciu::read`/`nciu::write`: ECA_NORDACCESS / ECA_NOWTACCESS).
-/// An already-connected channel returns at once from its own state; only
-/// a pending one round-trips through the engine's coordinator
-/// (`wait_connected` always does, which costs a cross-thread hop per call).
-async fn ensure_connected(ch: &RsChannel, op: CaOp) -> PyResult<()> {
+/// Wait for the channel to connect, at most `connect_timeout` (`None`:
+/// as long as the caller's own bound allows), then apply libca's access
+/// gate for `op` (`nciu::read`/`nciu::write`: ECA_NORDACCESS /
+/// ECA_NOWTACCESS). An already-connected channel returns at once from its
+/// own state; only a pending one round-trips through the engine's
+/// coordinator (`wait_connected` always does, which costs a cross-thread
+/// hop per call).
+async fn ensure_connected(ch: &RsChannel, op: CaOp, connect_timeout: Option<f64>) -> PyResult<()> {
     if ch.native_field_type().is_err() {
-        ch.wait_connected(duration_or_forever(None))
+        ch.wait_connected(duration_or_forever(connect_timeout))
             .await
             .map_err(map_ca)?;
     }
@@ -574,8 +576,9 @@ impl CaContext {
     }
 
     /// Write every channel concurrently. One entry per channel: `None` on
-    /// success, else the exception.
-    #[pyo3(signature = (channels, values, wait=true, timeout=None))]
+    /// success, else the exception. `timeout` and `connect_timeout` bound
+    /// each write as `CaChannel.put`'s do.
+    #[pyo3(signature = (channels, values, wait=true, timeout=None, connect_timeout=None))]
     fn put_many<'py>(
         &self,
         py: Python<'py>,
@@ -583,13 +586,14 @@ impl CaContext {
         values: Vec<Bound<'py, PyAny>>,
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyList>> {
-        let futs = Self::put_futs(&channels, &values, wait, timeout)?;
+        let futs = Self::put_futs(&channels, &values, wait, timeout, connect_timeout)?;
         let results = block_on(py, join_all(futs, join_error));
         results_to_py(py, results)
     }
 
-    #[pyo3(signature = (channels, values, wait=true, timeout=None))]
+    #[pyo3(signature = (channels, values, wait=true, timeout=None, connect_timeout=None))]
     fn put_many_async<'py>(
         &self,
         py: Python<'py>,
@@ -597,8 +601,9 @@ impl CaContext {
         values: Vec<Bound<'py, PyAny>>,
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let futs = Self::put_futs(&channels, &values, wait, timeout)?;
+        let futs = Self::put_futs(&channels, &values, wait, timeout, connect_timeout)?;
         into_py_future(py, async move {
             results_to_py_owned(join_all(futs, join_error).await)
         })
@@ -639,6 +644,7 @@ impl CaContext {
         values: &[Bound<'_, PyAny>],
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<Vec<impl Future<Output = PyResult<Option<bool>>> + Send + 'static + use<>>> {
         if channels.len() != values.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -657,6 +663,7 @@ impl CaContext {
                     req,
                     wait,
                     timeout,
+                    connect_timeout,
                 )))
             })
             .collect()
@@ -698,7 +705,7 @@ impl CaChannel {
         timeout: Option<f64>,
     ) -> PyResult<Snapshot> {
         let snap = bounded(timeout, async {
-            ensure_connected(&ch, CaOp::Read).await?;
+            ensure_connected(&ch, CaOp::Read, None).await?;
             let native = ch.native_field_type().map_err(map_ca)?.ca_wire_type();
             let base = match req.dbr {
                 Some(b) => b,
@@ -714,15 +721,18 @@ impl CaChannel {
         Python::attach(|py| Snapshot::from_rs(py, &name, snap))
     }
 
-    /// Waits for the connection first; `timeout` bounds connect and write.
+    /// Waits for the connection first; `timeout` bounds connect and write,
+    /// `connect_timeout` the connect alone, so an unbounded write to a
+    /// channel that is down fails then instead of being sent when it returns.
     async fn do_put(
         ch: RsChannel,
         req: PutRequest,
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<()> {
         bounded(timeout, async {
-            ensure_connected(&ch, CaOp::Write).await?;
+            ensure_connected(&ch, CaOp::Write, connect_timeout).await?;
             match (req, wait) {
                 (PutRequest::Str(s), true) => ch.put_string(&s, duration_or_forever(None)).await,
                 (PutRequest::Str(s), false) => ch.put_string_nowait(&s).await,
@@ -873,29 +883,38 @@ impl CaChannel {
 
     /// Write the channel. `wait=True` returns after the server has
     /// processed the record (`ca_put_callback`); `wait=False` returns once
-    /// the request is on the wire.
-    #[pyo3(signature = (value, wait=true, timeout=None))]
+    /// the request is on the wire. `timeout` bounds the whole call,
+    /// `connect_timeout` its wait for the connection.
+    #[pyo3(signature = (value, wait=true, timeout=None, connect_timeout=None))]
     fn put(
         &self,
         py: Python<'_>,
         value: &Bound<'_, PyAny>,
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<()> {
         let req = value::from_py(value)?;
-        block_on(py, Self::do_put(self.inner.clone(), req, wait, timeout))
+        block_on(
+            py,
+            Self::do_put(self.inner.clone(), req, wait, timeout, connect_timeout),
+        )
     }
 
-    #[pyo3(signature = (value, wait=true, timeout=None))]
+    #[pyo3(signature = (value, wait=true, timeout=None, connect_timeout=None))]
     fn put_async<'py>(
         &self,
         py: Python<'py>,
         value: &Bound<'py, PyAny>,
         wait: bool,
         timeout: Option<f64>,
+        connect_timeout: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let req = value::from_py(value)?;
-        into_py_future(py, Self::do_put(self.inner.clone(), req, wait, timeout))
+        into_py_future(
+            py,
+            Self::do_put(self.inner.clone(), req, wait, timeout, connect_timeout),
+        )
     }
 
     /// Subscribe. The subscription is drained with `CaSubscription.recv`.

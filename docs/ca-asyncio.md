@@ -12,7 +12,7 @@ from repics.ca.asyncio import caget, caput, camonitor, cainfo, connect
 | --- | --- |
 | `await connect(pv, wait=True, timeout=5.0, throw=True)` | coroutine |
 | `await caget(pv, form='time', datatype=None, count=0, timeout=5.0, throw=True)` | coroutine |
-| `await caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True)` | coroutine |
+| `await caput(pv, value, wait=False, datatype=None, timeout=5.0, repeat_value=False, throw=True, connect_timeout=None)` | coroutine |
 | `await cainfo(pv, wait=True, timeout=5.0, throw=True)` | coroutine |
 | `camonitor(pv, callback, form='time', datatype=None, count=0, mask=None, all_updates=False, notify_disconnect=False, connect_timeout=None)` | a plain function, not awaited. It must be called from inside a coroutine, because the subscription binds to the running loop |
 
